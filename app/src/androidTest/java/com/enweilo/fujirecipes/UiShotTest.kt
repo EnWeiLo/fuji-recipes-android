@@ -39,6 +39,15 @@ class UiShotTest {
             Thread.sleep(4000)
             shot(inst, "ui_01_photo")
 
+            // drag test: zoom in by code, then drag the picture with a finger
+            inst.runOnMainSync { controller.polaroid.update { it.copy(cropZ = 2f) } }
+            Thread.sleep(500)
+            dev.drag(640, 600, 400, 450, 30)
+            Thread.sleep(600)
+            val st = controller.polaroid.current?.state
+            shot(inst, "ui_01b_drag_x${st?.cropX?.toInt()}_y${st?.cropY?.toInt()}_z${st?.cropZ}")
+            inst.runOnMainSync { controller.polaroid.resetCrop() }
+
             click(dev, "版型")
             shot(inst, "ui_02_style")
             click(dev, "Wide")
