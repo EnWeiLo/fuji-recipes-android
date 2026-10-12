@@ -55,6 +55,7 @@ fun MainScreen(c: AppController, listState: LazyListState) {
                     size = 56.dp, accent = true,
                 )
             }
+            if (c.tab == Tab.Polaroid) PolaroidActions(c, backdrop)
             TabBar(c, backdrop, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 24.dp, vertical = 14.dp))
             PickerSheet(sheet, backdrop) { sheet = null }
             val target = c.recipes.firstOrNull { it.id == c.camRecipeId }
@@ -66,6 +67,7 @@ fun MainScreen(c: AppController, listState: LazyListState) {
         content = {
             when (c.tab) {
                 Tab.Recipes -> RecipeListTab(c, listState)
+                Tab.Polaroid -> PolaroidTab(c, onSheet = { sheet = it })
                 Tab.Camera -> CameraTab(c, onPickRecipe = { sheet = it }, onAskWrite = { askWrite = true })
                 Tab.Settings -> SettingsTab(c)
             }
@@ -82,6 +84,7 @@ private fun TabBar(c: AppController, backdrop: Backdrop, modifier: Modifier) {
     ) {
         val items = listOf(
             Triple(Tab.Recipes, Glyph.Recipes, "食譜"),
+            Triple(Tab.Polaroid, Glyph.Polaroid, "拍立得"),
             Triple(Tab.Camera, Glyph.Camera, "相機"),
             Triple(Tab.Settings, Glyph.Gear, "設定"),
         )

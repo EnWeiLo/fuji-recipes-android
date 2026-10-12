@@ -16,13 +16,14 @@ import com.enweilo.fujirecipes.camera.SlotInfo
 import com.enweilo.fujirecipes.data.Recipe
 import com.enweilo.fujirecipes.data.RecipeStore
 import com.enweilo.fujirecipes.data.emptyRecipe
+import com.enweilo.fujirecipes.polaroid.PolaroidController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class Tab { Recipes, Camera, Settings }
+enum class Tab { Recipes, Polaroid, Camera, Settings }
 
 sealed interface Screen {
     data class Detail(val id: String) : Screen
@@ -43,6 +44,9 @@ class AppController(private val app: Application) {
     private val usb = FujiUsb(app)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val prefs = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
+
+    /** The 拍立得 tab keeps its own state (photos, styles, saving). */
+    val polaroid = PolaroidController(app, scope) { text -> showToast(text) }
 
     // ---------------- general state ----------------
 

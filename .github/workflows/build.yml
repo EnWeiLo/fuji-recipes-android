@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, polaroid-tab]
   workflow_dispatch:
 
 permissions:
@@ -25,8 +25,35 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # The 拍立得 tab uses a few Google fonts. They are fetched and trimmed here instead of being kept in the repo.
+      - name: Fetch fonts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m venv /tmp/fontenv
+          /tmp/fontenv/bin/pip install --quiet fonttools
+          /tmp/fontenv/bin/python scripts/fetch_polaroid_fonts.py || true
+
       - name: Build release APK
-        run: ./gradlew --no-daemon --stacktrace assembleRelease
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace assembleRelease 2>&1 | tee build.log
+
+      # Keep the compiler messages on a side branch so a failed build can be read without opening the Actions page.
+      - name: Save build log
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/ci-log
+          { echo "run ${{ github.run_number }} commit ${{ github.sha }} result ${{ job.status }}"; grep -E "^e: |^w: .*(Unresolved|Type mismatch)|error:|FAILED|What went wrong|Execution failed|Caused by|BUILD " build.log | head -150; echo "----- tail -----"; tail -60 build.log; } > /tmp/ci-log/build.txt || true
+          cd /tmp/ci-log
+          git init -q -b ci-logs
+          git config user.name "ci"
+          git config user.email "ci@users.noreply.github.com"
+          git add build.txt
+          git commit -q -m "build log ${{ github.run_number }}"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" ci-logs || true
 
       - name: Name the APK
         run: cp app/build/outputs/apk/release/app-release.apk fuji-recipes.apk
@@ -39,6 +66,7 @@ jobs:
       # Always keep one release called "latest" holding the newest APK, so there is a stable download link:
       # https://github.com/<owner>/<repo>/releases/latest/download/fuji-recipes.apk
       - name: Publish the latest release
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

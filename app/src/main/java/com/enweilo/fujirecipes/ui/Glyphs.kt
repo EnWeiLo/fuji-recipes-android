@@ -16,7 +16,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-enum class Glyph { Plus, Back, Chevron, Check, Close, Search, Edit, Trash, Recipes, Camera, Gear }
+enum class Glyph { Plus, Back, Chevron, Check, Close, Search, Edit, Trash, Recipes, Polaroid, Camera, Gear }
 
 @Composable
 fun GlyphView(glyph: Glyph, color: Color, size: Dp = 22.dp, modifier: Modifier = Modifier) {
@@ -52,6 +52,11 @@ fun GlyphView(glyph: Glyph, color: Color, size: Dp = 22.dp, modifier: Modifier =
                 drawCircle(color, radius = 2.6f * s, center = p(9f, 7f))
                 drawCircle(color, radius = 2.6f * s, center = p(15f, 12f))
                 drawCircle(color, radius = 2.6f * s, center = p(8f, 17f))
+            }
+            Glyph.Polaroid -> {
+                drawRoundRect(color, topLeft = p(4.5f, 3f), size = Size(15f * s, 18f * s), cornerRadius = CornerRadius(2.5f * s), style = stroke)
+                drawRoundRect(color, topLeft = p(7.5f, 6f), size = Size(9f * s, 8.5f * s), cornerRadius = CornerRadius(1f * s), style = stroke)
+                line(p(9f, 17.8f), p(15f, 17.8f))
             }
             Glyph.Camera -> {
                 drawRoundRect(color, topLeft = p(3f, 7f), size = Size(18f * s, 13f * s), cornerRadius = CornerRadius(3f * s), style = stroke)
