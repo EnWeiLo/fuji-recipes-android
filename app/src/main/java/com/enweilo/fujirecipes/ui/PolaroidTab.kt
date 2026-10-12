@@ -54,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -66,7 +67,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.coerceAtLeast
-import androidx.compose.ui.unit.coerceIn
+import androidx.compose.ui.unit.coerceAtMost
 import androidx.compose.ui.unit.dp
 import com.enweilo.fujirecipes.AppController
 import com.enweilo.fujirecipes.polaroid.Card
@@ -98,6 +99,7 @@ fun PolaroidTab(c: AppController, onSheet: (SheetSpec) -> Unit) {
     val pc = c.polaroid
     var section by remember { mutableIntStateOf(0) }
     var colorOpen by remember { mutableStateOf(false) }
+    var compact by remember { mutableStateOf(false) }
 
     val firstPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
         if (uris.isNotEmpty()) pc.addPhotos(uris, replaceAll = true)
@@ -120,8 +122,9 @@ fun PolaroidTab(c: AppController, onSheet: (SheetSpec) -> Unit) {
         val availW = maxWidth - 32.dp
         val geo0 = Card.geometry(pc.current?.state ?: PState(), pc.source?.preview)
         val wanted = availW * (geo0.totalH / geo0.totalW)
+        val previewMax = if (compact) 120.dp else (screenH * 0.34f).coerceAtLeast(200.dp)
         val previewH by animateDpAsState(
-            wanted.coerceIn(150.dp, (screenH * 0.36f).coerceAtLeast(220.dp)),
+            wanted.coerceAtMost(previewMax).coerceAtLeast(if (compact) 100.dp else 150.dp),
             tween(240),
             label = "previewHeight",
         )
@@ -136,6 +139,19 @@ fun PolaroidTab(c: AppController, onSheet: (SheetSpec) -> Unit) {
                     onTapEmpty = { firstPicker.launch(imageOnly) },
                     onTapPhoto = { replacePicker.launch(imageOnly) },
                 )
+                // fold the preview away to leave room for the controls
+                Box(
+                    Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(Pal.card)
+                        .border(0.5.dp, Pal.line, CircleShape)
+                        .tap { compact = !compact },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    GlyphView(Glyph.Chevron, Pal.sub, 14.dp, Modifier.graphicsLayer { rotationZ = if (compact) 90f else -90f })
+                }
             }
             if (pc.items.isNotEmpty()) PhotoStrip(pc, onMore = { morePicker.launch(imageOnly) })
             Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
