@@ -4,6 +4,12 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -19,11 +25,13 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -56,6 +64,9 @@ import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.coerceAtLeast
+import androidx.compose.ui.unit.coerceIn
 import androidx.compose.ui.unit.dp
 import com.enweilo.fujirecipes.AppController
 import com.enweilo.fujirecipes.polaroid.Card
@@ -103,13 +114,21 @@ fun PolaroidTab(c: AppController, onSheet: (SheetSpec) -> Unit) {
     val listState = rememberLazyListState()
     LaunchedEffect(section) { listState.scrollToItem(0) }
 
-    Box(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        // The preview is as tall as the card needs (a banner is short, a story is tall) but never more than ~36% of the screen.
+        val screenH = maxHeight
+        val availW = maxWidth - 32.dp
+        val geo0 = Card.geometry(pc.current?.state ?: PState(), pc.source?.preview)
+        val wanted = availW * (geo0.totalH / geo0.totalW)
+        val previewH by animateDpAsState(
+            wanted.coerceIn(150.dp, (screenH * 0.36f).coerceAtLeast(220.dp)),
+            tween(240),
+            label = "previewHeight",
+        )
         Column(Modifier.fillMaxSize()) {
+            Spacer(Modifier.height(topInset() + 60.dp))
             Box(
-                Modifier
-                    .fillMaxWidth()
-                    .weight(0.44f)
-                    .padding(start = 16.dp, end = 16.dp, top = topInset() + 12.dp, bottom = 8.dp),
+                Modifier.fillMaxWidth().height(previewH + 14.dp).padding(horizontal = 16.dp, vertical = 7.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 CardPreview(
@@ -118,24 +137,31 @@ fun PolaroidTab(c: AppController, onSheet: (SheetSpec) -> Unit) {
                     onTapPhoto = { replacePicker.launch(imageOnly) },
                 )
             }
-            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            if (pc.items.isNotEmpty()) PhotoStrip(pc, onMore = { morePicker.launch(imageOnly) })
+            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
                 Segmented(listOf("照片", "版型", "文字", "日期"), section) { section = it }
             }
             LazyColumn(
-                Modifier.fillMaxWidth().weight(0.56f),
+                Modifier.fillMaxWidth().weight(1f),
                 state = listState,
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 190.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 112.dp + bottomInset()),
             ) {
                 item {
-                    when (section) {
-                        0 -> PhotoSection(
-                            pc, onSheet,
-                            onFirst = { firstPicker.launch(imageOnly) },
-                            onMore = { morePicker.launch(imageOnly) },
-                        )
-                        1 -> StyleSection(pc)
-                        2 -> TextSection(pc, onSheet, onColor = { colorOpen = true })
-                        else -> DateSection(pc, onSheet)
+                    AnimatedContent(
+                        targetState = section,
+                        transitionSpec = { fadeIn(tween(190, delayMillis = 60)) togetherWith fadeOut(tween(110)) },
+                        label = "section",
+                    ) { which ->
+                        when (which) {
+                            0 -> PhotoSection(
+                                pc, onSheet,
+                                onFirst = { firstPicker.launch(imageOnly) },
+                                onMore = { morePicker.launch(imageOnly) },
+                            )
+                            1 -> StyleSection(pc)
+                            2 -> TextSection(pc, onSheet, onColor = { colorOpen = true })
+                            else -> DateSection(pc, onSheet)
+                        }
                     }
                 }
             }
@@ -166,30 +192,91 @@ fun PolaroidTab(c: AppController, onSheet: (SheetSpec) -> Unit) {
     }
 }
 
-/** Share / save buttons that float above the tab bar. */
+/** Page title with share / save pinned at the top, so nothing floats over the controls. */
 @Composable
 fun BoxScope.PolaroidActions(c: AppController, backdrop: Backdrop) {
     val pc = c.polaroid
-    val p = Pal
     val ready = pc.items.isNotEmpty() && !pc.busy
-    Column(
+    Row(
         Modifier
-            .align(Alignment.BottomCenter)
-            .navigationBarsPadding()
-            .padding(start = 24.dp, end = 24.dp, bottom = 98.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .align(Alignment.TopCenter)
+            .fillMaxWidth()
+            .padding(top = topInset() + 8.dp, start = 22.dp, end = 16.dp)
+            .height(44.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (pc.progress.isNotEmpty()) {
-            Box(Modifier.clip(CircleShape).background(Color(0xE61C1C1E)).padding(horizontal = 14.dp, vertical = 6.dp)) {
-                Txt(pc.progress, 13, FontWeight.Medium, Color.White)
+        Txt("拍立得", 30, FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1)
+        if (pc.items.size > 1) {
+            GlassTextButton("ZIP", backdrop, { pc.saveAllZip() }, enabled = ready, height = 40.dp, sidePadding = 14.dp)
+        }
+        GlassTextButton("儲存", backdrop, { pc.saveCurrent() }, enabled = ready, height = 40.dp, sidePadding = 16.dp)
+        GlassTextButton("分享", backdrop, { pc.shareCurrent() }, accent = true, enabled = ready, height = 40.dp, sidePadding = 16.dp)
+    }
+    if (pc.progress.isNotEmpty()) {
+        Box(
+            Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = topInset() + 58.dp)
+                .clip(CircleShape)
+                .background(Color(0xE61C1C1E))
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+        ) { Txt(pc.progress, 13, FontWeight.Medium, Color.White) }
+    }
+}
+
+/** The photo strip: always visible under the preview, so switching photos works from any section. */
+@Composable
+private fun PhotoStrip(pc: PolaroidController, onMore: () -> Unit) {
+    val p = Pal
+    LazyRow(
+        Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (pc.items.size < PolaroidController.MAX_PHOTOS) {
+            item(key = "add") {
+                Box(Modifier.size(62.dp, 66.dp), contentAlignment = Alignment.BottomStart) {
+                    Box(
+                        Modifier
+                            .size(58.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(p.card)
+                            .border(1.dp, p.line, RoundedCornerShape(14.dp))
+                            .tap(enabled = !pc.busy, onClick = onMore),
+                        contentAlignment = Alignment.Center,
+                    ) { GlyphView(Glyph.Plus, p.accent, 24.dp) }
+                }
             }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            GlassTextButton("分享", backdrop, { pc.shareCurrent() }, Modifier.weight(1.3f), accent = true, enabled = ready, sidePadding = 6.dp)
-            GlassTextButton("儲存此張", backdrop, { pc.saveCurrent() }, Modifier.weight(1.3f), enabled = ready, sidePadding = 6.dp)
-            if (pc.items.size > 1) {
-                GlassTextButton("ZIP", backdrop, { pc.saveAllZip() }, Modifier.weight(0.9f), enabled = ready, sidePadding = 6.dp)
+        itemsIndexed(pc.items, key = { _, it -> it.id }) { i, item ->
+            val on = i == pc.index
+            Box(Modifier.size(66.dp)) {
+                val thumb = item.thumb
+                val shape = RoundedCornerShape(14.dp)
+                Box(
+                    Modifier
+                        .size(58.dp)
+                        .align(Alignment.BottomStart)
+                        .clip(shape)
+                        .background(p.field)
+                        .border(if (on) 2.dp else 0.5.dp, if (on) p.accent else p.line, shape)
+                        .tap { pc.select(i) },
+                ) {
+                    if (thumb != null) {
+                        val image = remember(item.id) { thumb.asImageBitmap() }
+                        Image(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                    }
+                }
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xCC1C1C1E))
+                        .tap(enabled = !pc.busy) { pc.delete(i) },
+                    contentAlignment = Alignment.Center,
+                ) { GlyphView(Glyph.Close, Color.White, 11.dp) }
             }
         }
     }
@@ -310,55 +397,21 @@ private fun PhotoSection(pc: PolaroidController, onSheet: (SheetSpec) -> Unit, o
     val p = Pal
     var syncPick by remember { mutableIntStateOf(0) }
     Column {
-        SectionLabel("選擇照片")
+        SectionLabel(if (pc.items.isEmpty()) "選擇照片" else "第 ${pc.index + 1} 張／共 ${pc.items.size} 張")
         Panel {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SoftButton(if (pc.items.isEmpty()) "選擇照片（最多 20 張）" else "重新選擇照片", onFirst, enabled = !pc.busy)
-                if (pc.items.isNotEmpty() && pc.items.size < PolaroidController.MAX_PHOTOS) {
-                    SoftButton("加入更多照片", onMore, enabled = !pc.busy)
-                }
-                if (pc.busy && pc.progress.isEmpty()) Txt("處理中…", 12, color = p.sub)
-                else Txt("點預覽也能選照片；點照片可更換這張，拖曳調整裁切，雙指縮放。", 12, color = p.sub)
-            }
-        }
-        if (pc.items.isNotEmpty()) {
-            SectionLabel("第 ${pc.index + 1} 張／共 ${pc.items.size} 張")
-            Panel {
-                LazyRow(
-                    contentPadding = PaddingValues(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    itemsIndexed(pc.items, key = { _, it -> it.id }) { i, item ->
-                        val on = i == pc.index
-                        Box(Modifier.size(68.dp)) {
-                            val thumb = item.thumb
-                            val shape = RoundedCornerShape(12.dp)
-                            Box(
-                                Modifier
-                                    .size(64.dp)
-                                    .align(Alignment.BottomStart)
-                                    .clip(shape)
-                                    .background(p.field)
-                                    .border(if (on) 2.dp else 0.5.dp, if (on) p.accent else p.line, shape)
-                                    .tap { pc.select(i) },
-                            ) {
-                                if (thumb != null) {
-                                    val image = remember(item.id) { thumb.asImageBitmap() }
-                                    Image(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                                }
-                            }
-                            Box(
-                                Modifier
-                                    .align(Alignment.TopEnd)
-                                    .size(24.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xCC1C1C1E))
-                                    .tap(enabled = !pc.busy) { pc.delete(i) },
-                                contentAlignment = Alignment.Center,
-                            ) { GlyphView(Glyph.Close, Color.White, 12.dp) }
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (pc.items.isEmpty()) {
+                    SoftButton("選擇照片（最多 20 張）", onFirst, enabled = !pc.busy)
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        SoftButton("重新選擇", onFirst, Modifier.weight(1f), enabled = !pc.busy)
+                        if (pc.items.size < PolaroidController.MAX_PHOTOS) {
+                            SoftButton("加入更多", onMore, Modifier.weight(1f), enabled = !pc.busy)
                         }
                     }
                 }
+                if (pc.busy && pc.progress.isEmpty()) Txt("處理中…", 12, color = p.sub)
+                else Txt("點預覽也能選照片；點照片可更換這張，拖曳調整裁切，雙指縮放。", 12, color = p.sub)
             }
         }
         if (pc.items.size > 1) {
@@ -559,25 +612,34 @@ private fun DateSection(pc: PolaroidController, onSheet: (SheetSpec) -> Unit) {
 @Composable
 private fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
     val p = Pal
-    Row(
+    BoxWithConstraints(
         Modifier
             .fillMaxWidth()
-            .padding(bottom = 4.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(p.field)
             .padding(3.dp),
     ) {
-        options.forEachIndexed { i, label ->
-            val on = i == selected
-            Box(
-                Modifier
-                    .weight(1f)
-                    .height(40.dp)
-                    .clip(RoundedCornerShape(13.dp))
-                    .background(if (on) p.accent else Color.Transparent)
-                    .tap { onSelect(i) },
-                contentAlignment = Alignment.Center,
-            ) { Txt(label, 15, FontWeight.Medium, if (on) Color.White else p.text, maxLines = 1) }
+        val segW: Dp = maxWidth / options.size
+        val x by animateDpAsState(segW * selected, tween(220), label = "segment")
+        Box(
+            Modifier
+                .offset(x = x)
+                .width(segW)
+                .height(40.dp)
+                .clip(RoundedCornerShape(13.dp))
+                .background(p.accent),
+        )
+        Row {
+            options.forEachIndexed { i, label ->
+                val on = i == selected
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(40.dp)
+                        .tap { onSelect(i) },
+                    contentAlignment = Alignment.Center,
+                ) { Txt(label, 15, FontWeight.Medium, if (on) Color.White else p.text, maxLines = 1) }
+            }
         }
     }
 }
