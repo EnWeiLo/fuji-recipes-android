@@ -182,10 +182,10 @@ fun BoxScope.PolaroidActions(c: AppController, backdrop: Backdrop) {
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            GlassTextButton("分享", backdrop, { pc.shareCurrent() }, Modifier.weight(1.3f), accent = true, enabled = ready)
-            GlassTextButton("儲存此張", backdrop, { pc.saveCurrent() }, Modifier.weight(1.2f), enabled = ready)
+            GlassTextButton("分享", backdrop, { pc.shareCurrent() }, Modifier.weight(1.3f), accent = true, enabled = ready, sidePadding = 6.dp)
+            GlassTextButton("儲存此張", backdrop, { pc.saveCurrent() }, Modifier.weight(1.3f), enabled = ready, sidePadding = 6.dp)
             if (pc.items.size > 1) {
-                GlassTextButton("ZIP", backdrop, { pc.saveAllZip() }, Modifier.weight(0.8f), enabled = ready)
+                GlassTextButton("ZIP", backdrop, { pc.saveAllZip() }, Modifier.weight(0.9f), enabled = ready, sidePadding = 6.dp)
             }
         }
     }

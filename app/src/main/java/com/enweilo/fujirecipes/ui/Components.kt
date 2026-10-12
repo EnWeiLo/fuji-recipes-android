@@ -161,6 +161,7 @@ fun GlassTextButton(
     accent: Boolean = false,
     enabled: Boolean = true,
     height: Dp = 44.dp,
+    sidePadding: Dp = 20.dp,
 ) {
     val p = Pal
     Box(
@@ -168,7 +169,7 @@ fun GlassTextButton(
             .height(height)
             .glass(backdrop, tint = if (accent) p.accent else Color.Unspecified)
             .tap(enabled, onClick)
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = sidePadding),
         contentAlignment = Alignment.Center,
     ) {
         Txt(text, 16, FontWeight.SemiBold, if (accent) Color.White else p.text, maxLines = 1)
