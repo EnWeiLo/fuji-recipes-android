@@ -41,16 +41,21 @@ class UiShotTest {
 
             click(dev, "版型")
             shot(inst, "ui_02_style")
+            click(dev, "Wide")
+            shot(inst, "ui_03_wide_" + controller.polaroid.current?.state?.ratio)
             click(dev, "橫幅")
-            shot(inst, "ui_03_banner")
+            shot(inst, "ui_03_banner_" + controller.polaroid.current?.state?.ratio)
+            inst.runOnMainSync { controller.polaroid.setRatio(com.enweilo.fujirecipes.polaroid.Ratio.Banner) }
+            Thread.sleep(600)
+            shot(inst, "ui_03b_banner_forced")
             click(dev, "方框")
 
             click(dev, "文字")
             shot(inst, "ui_04_text")
-            dev.swipe(540, 1700, 540, 700, 25)
+            dev.swipe(540, 1900, 540, 1200, 25)
             Thread.sleep(600)
             shot(inst, "ui_05_text_scrolled")
-            dev.swipe(540, 1700, 540, 700, 25)
+            dev.swipe(540, 1900, 540, 1200, 25)
             Thread.sleep(600)
             shot(inst, "ui_06_text_end")
 
@@ -62,8 +67,8 @@ class UiShotTest {
 
             click(dev, "文字")
             Thread.sleep(500)
-            dev.swipe(540, 700, 540, 1700, 25)
-            dev.swipe(540, 700, 540, 1700, 25)
+            dev.swipe(540, 1200, 540, 1900, 25)
+            dev.swipe(540, 1200, 540, 1900, 25)
             Thread.sleep(500)
             click(dev, "相機／鏡頭字型")
             Thread.sleep(800)

@@ -115,13 +115,13 @@ fun PolaroidTab(c: AppController, onSheet: (SheetSpec) -> Unit) {
                     onTapPhoto = { replacePicker.launch(imageOnly) },
                 )
             }
+            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                Segmented(listOf("照片", "版型", "文字", "日期"), section) { section = it }
+            }
             LazyColumn(
                 Modifier.fillMaxWidth().weight(0.56f),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 190.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 190.dp),
             ) {
-                item {
-                    Segmented(listOf("照片", "版型", "文字", "日期"), section) { section = it }
-                }
                 item {
                     when (section) {
                         0 -> PhotoSection(
