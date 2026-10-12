@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -99,6 +100,8 @@ fun PolaroidTab(c: AppController, onSheet: (SheetSpec) -> Unit) {
     val imageOnly = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
 
     BackHandler(enabled = colorOpen) { colorOpen = false }
+    val listState = rememberLazyListState()
+    LaunchedEffect(section) { listState.scrollToItem(0) }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -120,6 +123,7 @@ fun PolaroidTab(c: AppController, onSheet: (SheetSpec) -> Unit) {
             }
             LazyColumn(
                 Modifier.fillMaxWidth().weight(0.56f),
+                state = listState,
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 190.dp),
             ) {
                 item {
