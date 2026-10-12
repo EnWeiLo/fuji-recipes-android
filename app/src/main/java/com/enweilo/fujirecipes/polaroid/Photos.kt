@@ -27,13 +27,13 @@ object Photos {
         try {
             context.contentResolver.openInputStream(uri)?.use { input ->
                 val exif = ExifInterface(input)
-                val iso = exif.getAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY)
+                val iso = exif.getAttribute("PhotographicSensitivity")
                     ?: exif.getAttribute(ExifInterface.TAG_ISO_SPEED_RATINGS)
                     ?: ""
                 return Meta(
                     make = exif.getAttribute(ExifInterface.TAG_MAKE)?.trim() ?: "",
                     model = exif.getAttribute(ExifInterface.TAG_MODEL)?.trim() ?: "",
-                    lens = exif.getAttribute(ExifInterface.TAG_LENS_MODEL)?.trim() ?: "",
+                    lens = exif.getAttribute("LensModel")?.trim() ?: "",
                     iso = iso.trim(),
                     fnum = exif.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0.0),
                     shut = exif.getAttributeDouble(ExifInterface.TAG_EXPOSURE_TIME, 0.0),
