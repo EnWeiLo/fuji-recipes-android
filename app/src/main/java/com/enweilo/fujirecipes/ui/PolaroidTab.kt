@@ -64,6 +64,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.coerceAtLeast
@@ -147,6 +149,7 @@ fun PolaroidTab(c: AppController, onSheet: (SheetSpec) -> Unit) {
                         .clip(CircleShape)
                         .background(Pal.card)
                         .border(0.5.dp, Pal.line, CircleShape)
+                        .semantics { contentDescription = "收合預覽" }
                         .tap { compact = !compact },
                     contentAlignment = Alignment.Center,
                 ) {

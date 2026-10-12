@@ -39,6 +39,13 @@ class UiShotTest {
             Thread.sleep(4000)
             shot(inst, "ui_01_photo")
 
+            // fold the preview away and bring it back
+            dev.findObject(By.desc("收合預覽"))?.click()
+            Thread.sleep(900)
+            shot(inst, "ui_01c_preview_folded")
+            dev.findObject(By.desc("收合預覽"))?.click()
+            Thread.sleep(900)
+
             // drag test: zoom in by code, then drag the picture with a finger
             inst.runOnMainSync { controller.polaroid.update { it.copy(cropZ = 2f) } }
             Thread.sleep(500)
