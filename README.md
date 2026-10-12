@@ -26,6 +26,24 @@
 
 連線過程會記錄在「相機」頁底部的「連線紀錄」，遇到問題請把紀錄貼出來。
 
+## 拍立得
+
+「拍立得」分頁是原生重寫的拍立得相框工具（原網頁版：polaroid-tool），功能一樣：
+
+- 一次最多 20 張，點縮圖切換，可套用另一張的設定
+- 五種邊框（白／黑／取色／復古／底片）、七種比例（原圖、Mini、方框、Wide、橫幅、IG 貼文、IG 限動）
+- 自動讀取 EXIF：相機、鏡頭、快門／光圈／ISO、日期；也可手動輸入或關閉；已確認的機型顯示官方字標
+- 備註、日期戳（可上下拖曳）、12 種字型、字體大小與顏色
+- 拖曳預覽調整裁切、雙指縮放；點照片可更換這一張
+- 分享、儲存到相簿（Pictures/拍立得）、全部打包成 ZIP（下載資料夾）
+
+字型：粉圓、辰宇落雁、源流明體已精簡後放在 `app/src/main/assets/polaroid/fonts`；
+Caveat、Share Tech Mono、Zen Maru Gothic、Kiwi Maru、Yuji Syuku 在編譯時由
+`scripts/fetch_polaroid_fonts.py` 從 google/fonts 下載並精簡（抓不到時改用系統字型）。
+
+另有一個 `Render check` 工作流程：在模擬器上用真正的渲染程式畫出各種卡片與畫面截圖，
+放到 `render-check` 分支，方便檢查。
+
 ## 效果需求
 
 - 液態玻璃折射：Android 13+（API 33）
