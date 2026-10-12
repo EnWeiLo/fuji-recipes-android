@@ -17,6 +17,7 @@ android {
         targetSdk = 37
         versionCode = runNumber
         versionName = "0.1.$runNumber"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     // A fixed key committed to the repo: every build is signed the same way, so updates install over the
@@ -58,4 +59,7 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.kyant.backdrop)
     implementation(libs.kyant.shapes)
+
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.1")
 }
