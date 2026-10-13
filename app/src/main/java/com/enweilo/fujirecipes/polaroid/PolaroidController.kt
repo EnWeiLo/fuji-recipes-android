@@ -1,8 +1,13 @@
 package com.enweilo.fujirecipes.polaroid
 
 import android.app.Application
+import android.app.PendingIntent
 import android.content.ClipData
 import android.content.Intent
+import android.graphics.drawable.Icon
+import android.os.Build
+import android.os.Parcelable
+import android.service.chooser.ChooserAction
 import android.graphics.Bitmap
 import android.media.MediaActionSound
 import android.net.Uri
@@ -13,6 +18,8 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
+import com.enweilo.fujirecipes.CopyImageReceiver
+import com.enweilo.fujirecipes.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -302,6 +309,15 @@ class PolaroidController(
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 val chooser = Intent.createChooser(send, "拍立得照片").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                // Android 14+: a "複製圖片" button in the share sheet, like the web version has
+                if (Build.VERSION.SDK_INT >= 34) {
+                    val copy = Intent(app, CopyImageReceiver::class.java).putExtra(CopyImageReceiver.EXTRA_URI, uri.toString())
+                    val pending = PendingIntent.getBroadcast(
+                        app, 0, copy, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    )
+                    val action = ChooserAction.Builder(Icon.createWithResource(app, R.drawable.ic_copy), "複製圖片", pending).build()
+                    chooser.putExtra(Intent.EXTRA_CHOOSER_CUSTOM_ACTIONS, arrayOf<Parcelable>(action))
+                }
                 app.startActivity(chooser)
             } catch (e: Exception) {
                 toast("分享失敗")

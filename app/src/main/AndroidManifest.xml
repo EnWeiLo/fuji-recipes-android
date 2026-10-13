@@ -35,6 +35,11 @@
                 android:resource="@xml/usb_device_filter" />
         </activity>
 
+        <!-- Share sheet "複製圖片" button -->
+        <receiver
+            android:name=".CopyImageReceiver"
+            android:exported="false" />
+
         <!-- Lets the share sheet read the finished 拍立得 picture -->
         <provider
             android:name="androidx.core.content.FileProvider"
