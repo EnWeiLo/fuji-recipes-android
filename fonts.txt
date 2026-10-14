@@ -1,0 +1,19 @@
+ok caveat.ttf 52840
+ok sharetechmono.ttf 18788
+ok zenmaru.ttf 2409060
+ok kiwimaru.ttf 2869032
+ok yuji.ttf 4828076
+total 27060
+drwxr-xr-x 2 runner runner    4096 Oct 14 17:59 .
+drwxr-xr-x 3 runner runner    4096 Oct 14 17:58 ..
+-rw-r--r-- 1 runner runner   52840 Oct 14 17:59 caveat.ttf
+-rw-r--r-- 1 runner runner 5142324 Oct 14 17:58 chen.ttf
+-rw-r--r-- 1 runner runner 2509428 Oct 14 17:58 genryu_b.otf
+-rw-r--r-- 1 runner runner 2477584 Oct 14 17:58 genryu_h.otf
+-rw-r--r-- 1 runner runner 2529324 Oct 14 17:58 genryu_m.otf
+-rw-r--r-- 1 runner runner 2522128 Oct 14 17:58 genryu_sb.otf
+-rw-r--r-- 1 runner runner 2325812 Oct 14 17:58 huninn.ttf
+-rw-r--r-- 1 runner runner 2869032 Oct 14 17:59 kiwimaru.ttf
+-rw-r--r-- 1 runner runner   18788 Oct 14 17:59 sharetechmono.ttf
+-rw-r--r-- 1 runner runner 4828076 Oct 14 17:59 yuji.ttf
+-rw-r--r-- 1 runner runner 2409060 Oct 14 17:59 zenmaru.ttf

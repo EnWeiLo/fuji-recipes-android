@@ -1,0 +1,44 @@
+test(AVD) - 14 Tests 2/6 completed. (0 skipped) (0 failed)
+test(AVD) - 14 Tests 3/6 completed. (0 skipped) (0 failed)
+test(AVD) - 14 Tests 5/6 completed. (0 skipped) (0 failed)
+BUILD SUCCESSFUL in 3m 7s
+> Task :app:mergeDebugAndroidTestAssets
+> Task :app:generateDebugAndroidTestGlobalSynthetics FROM-CACHE
+> Task :app:compressDebugAndroidTestAssets
+> Task :app:processDebugAndroidTestJavaRes
+> Task :app:mergeProjectDexDebug
+> Task :app:mergeDebugAndroidTestJavaResource
+> Task :app:checkDebugAndroidTestDuplicateClasses
+> Task :app:desugarDebugAndroidTestFileDependencies FROM-CACHE
+> Task :app:packageDebug
+> Task :app:createDebugApkListingFileRedirect
+> Task :app:mergeLibDexDebugAndroidTest FROM-CACHE
+> Task :app:checkDebugAndroidTestAarMetadata
+> Task :app:mapDebugAndroidTestSourceSetPaths
+> Task :app:compileDebugAndroidTestNavigationResources FROM-CACHE
+> Task :app:mergeDebugAndroidTestResources
+> Task :app:mergeDebugAndroidTestManifest
+> Task :app:processDebugAndroidTestManifest
+> Task :app:mergeExtDexDebugAndroidTest
+> Task :app:mergeDebugAndroidTestJniLibFolders
+> Task :app:mergeDebugAndroidTestNativeLibs NO-SOURCE
+> Task :app:stripDebugAndroidTestDebugSymbols NO-SOURCE
+> Task :app:validateSigningDebugAndroidTest
+> Task :app:writeDebugAndroidTestSigningConfigVersions
+> Task :app:processDebugAndroidTestResources
+> Task :app:dexBuilderDebugAndroidTest
+> Task :app:mergeProjectDexDebugAndroidTest
+> Task :app:packageDebugAndroidTest
+> Task :app:createDebugAndroidTestApkListingFileRedirect
+Starting 6 tests on test(AVD) - 14
+test(AVD) - 14 Tests 2/6 completed. (0 skipped) (0 failed)
+> Task :app:connectedDebugAndroidTest
+
+test(AVD) - 14 Tests 3/6 completed. (0 skipped) (0 failed)
+test(AVD) - 14 Tests 5/6 completed. (0 skipped) (0 failed)
+Finished 6 tests on test(AVD) - 14
+gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__reactivecircus_android-emulator-runner-1792000829106.json
+
+BUILD SUCCESSFUL in 3m 7s
+68 actionable tasks: 59 executed, 9 from cache
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.7.1/userguide/configuration_cache_enabling.html
