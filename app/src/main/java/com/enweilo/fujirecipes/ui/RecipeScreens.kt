@@ -2,6 +2,17 @@ package com.enweilo.fujirecipes.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -48,14 +59,38 @@ fun MainScreen(c: AppController, listState: LazyListState) {
     androidx.activity.compose.BackHandler(enabled = sheet != null || askWrite) { sheet = null; askWrite = false }
     GlassScreen(
         bars = { backdrop ->
-            if (c.tab == Tab.Recipes) {
-                GlassCircleButton(
-                    Glyph.Plus, backdrop, onClick = { c.startNew() },
-                    modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end = 20.dp, bottom = 96.dp),
-                    size = 56.dp, accent = true,
-                )
+            AnimatedVisibility(
+                c.tab == Tab.Recipes,
+                modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end = 20.dp, bottom = 96.dp),
+                enter = fadeIn(tween(220, delayMillis = 80)) + scaleIn(tween(220, delayMillis = 80), initialScale = 0.85f),
+                exit = fadeOut(tween(120)) + scaleOut(tween(120), targetScale = 0.85f),
+            ) {
+                GlassCircleButton(Glyph.Plus, backdrop, onClick = { c.startNew() }, size = 56.dp, accent = true)
             }
-            if (c.tab == Tab.Polaroid) PolaroidActions(c, backdrop)
+            AnimatedVisibility(
+                c.tab == Tab.Polaroid,
+                modifier = Modifier.align(Alignment.TopCenter),
+                enter = fadeIn(tween(220, delayMillis = 80)),
+                exit = fadeOut(tween(120)),
+            ) { PolaroidActions(c, backdrop) }
+            if (c.updateStatus.isNotEmpty()) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = topInset() + 12.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xE61C1C1E))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) { Txt(c.updateStatus, 15, FontWeight.Medium, Color.White) }
+            }
+            ConfirmDialog(
+                c.updatePrompt, "有新版本可以更新",
+                "目前 build ${c.installedBuild}，最新 build ${c.latest?.build ?: ""}" +
+                    (c.latest?.size?.takeIf { it > 0 }?.let { "（約 ${it / 1_000_000} MB）" } ?: "") +
+                    "。更新後會保留你的食譜。",
+                "更新",
+                onConfirm = { c.startUpdate() }, onDismiss = { c.dismissUpdatePrompt() },
+            )
             TabBar(c, backdrop, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 24.dp, vertical = 14.dp))
             PickerSheet(sheet, backdrop) { sheet = null }
             val target = c.recipes.firstOrNull { it.id == c.camRecipeId }
@@ -65,11 +100,21 @@ fun MainScreen(c: AppController, listState: LazyListState) {
             )
         },
         content = {
-            when (c.tab) {
-                Tab.Recipes -> RecipeListTab(c, listState)
-                Tab.Polaroid -> PolaroidTab(c, onSheet = { sheet = it })
-                Tab.Camera -> CameraTab(c, onPickRecipe = { sheet = it }, onAskWrite = { askWrite = true })
-                Tab.Settings -> SettingsTab(c)
+            AnimatedContent(
+                targetState = c.tab,
+                transitionSpec = {
+                    val dir = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                    (fadeIn(tween(240, delayMillis = 70)) + slideInHorizontally(tween(300)) { dir * it / 10 }) togetherWith
+                        (fadeOut(tween(120)) + slideOutHorizontally(tween(300)) { -dir * it / 10 })
+                },
+                label = "tab",
+            ) { tab ->
+                when (tab) {
+                    Tab.Recipes -> RecipeListTab(c, listState)
+                    Tab.Camera -> CameraTab(c, onPickRecipe = { sheet = it }, onAskWrite = { askWrite = true })
+                    Tab.Polaroid -> PolaroidTab(c, onSheet = { sheet = it })
+                    Tab.Settings -> SettingsTab(c)
+                }
             }
         },
     )
@@ -84,8 +129,8 @@ private fun TabBar(c: AppController, backdrop: Backdrop, modifier: Modifier) {
     ) {
         val items = listOf(
             Triple(Tab.Recipes, Glyph.Recipes, "食譜"),
-            Triple(Tab.Polaroid, Glyph.Polaroid, "拍立得"),
             Triple(Tab.Camera, Glyph.Camera, "相機"),
+            Triple(Tab.Polaroid, Glyph.Polaroid, "拍立得"),
             Triple(Tab.Settings, Glyph.Gear, "設定"),
         )
         for ((tab, glyph, label) in items) {
@@ -95,13 +140,14 @@ private fun TabBar(c: AppController, backdrop: Backdrop, modifier: Modifier) {
                     .weight(1f)
                     .fillMaxSize()
                     .clip(CircleShape)
-                    .background(if (on) p.accent.copy(alpha = 0.16f) else Color.Transparent)
+                    .background(animateColorAsState(if (on) p.accent.copy(alpha = 0.16f) else Color.Transparent, tween(250), label = "bg").value)
                     .tap { c.tab = tab },
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                GlyphView(glyph, if (on) p.accent else p.sub, 22.dp)
-                Txt(label, 11, FontWeight.Medium, if (on) p.accent else p.sub, Modifier.padding(top = 2.dp))
+                val tint by animateColorAsState(if (on) p.accent else p.sub, tween(250), label = "tint")
+                GlyphView(glyph, tint, 22.dp)
+                Txt(label, 11, FontWeight.Medium, tint, Modifier.padding(top = 2.dp))
             }
         }
     }

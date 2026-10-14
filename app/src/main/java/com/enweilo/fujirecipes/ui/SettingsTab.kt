@@ -65,6 +65,23 @@ fun SettingsTab(c: AppController) {
             }
         }
 
+        item { SectionLabel("更新") }
+        item {
+            Panel {
+                Column(Modifier.padding(16.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
+                    ToggleRow("啟動時自動檢查更新", c.autoUpdate) { c.setAutoUpdate(it) }
+                    Divider()
+                    ValueRow("狀態", c.updateNote.ifEmpty { "尚未檢查" })
+                    val latest = c.latest
+                    if (latest != null) {
+                        SoftButton("下載並安裝 build ${latest.build}", { c.startUpdate() }, enabled = c.updateStatus.isEmpty())
+                    }
+                    SoftButton(if (c.checking) "檢查中…" else "立即檢查更新", { c.checkForUpdate(true) }, enabled = !c.checking && c.updateStatus.isEmpty())
+                    Txt("只會連到 GitHub 查看最新版本，不會上傳任何資料。第一次更新需要允許「安裝未知應用程式」。", 12, color = p.sub)
+                }
+            }
+        }
+
         item { SectionLabel("資料") }
         item {
             Panel {

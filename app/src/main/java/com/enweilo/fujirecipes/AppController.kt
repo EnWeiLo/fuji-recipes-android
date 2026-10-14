@@ -17,13 +17,14 @@ import com.enweilo.fujirecipes.data.Recipe
 import com.enweilo.fujirecipes.data.RecipeStore
 import com.enweilo.fujirecipes.data.emptyRecipe
 import com.enweilo.fujirecipes.polaroid.PolaroidController
+import com.enweilo.fujirecipes.update.Updater
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class Tab { Recipes, Polaroid, Camera, Settings }
+enum class Tab { Recipes, Camera, Polaroid, Settings }
 
 sealed interface Screen {
     data class Detail(val id: String) : Screen
@@ -74,6 +75,74 @@ class AppController(private val app: Application) {
     }
 
     private fun persist() = store.save(recipes)
+
+    // ---------------- updates ----------------
+
+    var autoUpdate by mutableStateOf(prefs.getBoolean("autoUpdate", true))
+        private set
+    var latest by mutableStateOf<Updater.Release?>(null)
+        private set
+    var updatePrompt by mutableStateOf(false)
+    /** Non-empty while downloading, e.g. "下載更新中… 40%". */
+    var updateStatus by mutableStateOf("")
+        private set
+    var checking by mutableStateOf(false)
+        private set
+    var updateNote by mutableStateOf("")
+        private set
+    val installedBuild: Long get() = Updater.installedBuild(app)
+
+    fun setAutoUpdate(on: Boolean) {
+        autoUpdate = on
+        prefs.edit().putBoolean("autoUpdate", on).apply()
+    }
+
+    /** [manual] = the user asked; otherwise it is the quiet check at launch. */
+    fun checkForUpdate(manual: Boolean) {
+        if (checking || updateStatus.isNotEmpty()) return
+        if (!manual && !autoUpdate) return
+        checking = true
+        if (manual) updateNote = "檢查中…"
+        scope.launch {
+            val release = withContext(Dispatchers.IO) { Updater.fetchLatest() }
+            checking = false
+            if (release == null) {
+                if (manual) updateNote = "無法連線，請稍後再試"
+                return@launch
+            }
+            val newer = Updater.isNewer(release, installedBuild)
+            latest = if (newer) release else null
+            updateNote = if (newer) "有新版本 build ${release.build}" else "已是最新版本"
+            if (newer && (manual || prefs.getInt("dismissedBuild", 0) != release.build)) updatePrompt = true
+        }
+    }
+
+    fun dismissUpdatePrompt() {
+        updatePrompt = false
+        latest?.let { prefs.edit().putInt("dismissedBuild", it.build).apply() }
+    }
+
+    fun startUpdate() {
+        val release = latest ?: return
+        if (updateStatus.isNotEmpty()) return
+        if (!Updater.canInstall(app)) {
+            showToast("請先允許「安裝未知應用程式」，再按一次更新")
+            val intent = android.content.Intent(
+                android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:${app.packageName}"),
+            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            app.startActivity(intent)
+            return
+        }
+        updateStatus = "下載更新中… 0%"
+        scope.launch {
+            val file = withContext(Dispatchers.IO) {
+                Updater.download(app, release) { pct -> scope.launch { updateStatus = "下載更新中… $pct%" } }
+            }
+            updateStatus = ""
+            if (file == null) showToast("下載失敗，請稍後再試") else Updater.install(app, file)
+        }
+    }
 
     // ---------------- navigation ----------------
 

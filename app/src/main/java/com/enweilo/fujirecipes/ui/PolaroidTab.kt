@@ -213,12 +213,12 @@ fun PolaroidTab(c: AppController, onSheet: (SheetSpec) -> Unit) {
 
 /** Page title with share / save pinned at the top, so nothing floats over the controls. */
 @Composable
-fun BoxScope.PolaroidActions(c: AppController, backdrop: Backdrop) {
+fun PolaroidActions(c: AppController, backdrop: Backdrop) {
     val pc = c.polaroid
     val ready = pc.items.isNotEmpty() && !pc.busy
+    Box(Modifier.fillMaxWidth()) {
     Row(
         Modifier
-            .align(Alignment.TopCenter)
             .fillMaxWidth()
             .padding(top = topInset() + 8.dp, start = 22.dp, end = 16.dp)
             .height(44.dp),
@@ -241,6 +241,7 @@ fun BoxScope.PolaroidActions(c: AppController, backdrop: Backdrop) {
                 .background(Color(0xE61C1C1E))
                 .padding(horizontal = 14.dp, vertical = 6.dp),
         ) { Txt(pc.progress, 13, FontWeight.Medium, Color.White) }
+    }
     }
 }
 
@@ -690,7 +691,7 @@ private fun Chips(options: List<String>, selected: Int, columns: Int, onSelect: 
 }
 
 @Composable
-private fun ToggleRow(label: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
+internal fun ToggleRow(label: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     val p = Pal
     Row(
         Modifier.fillMaxWidth().heightIn(min = 52.dp).tap(enabled) { onChange(!checked) }.padding(horizontal = 16.dp, vertical = 10.dp),

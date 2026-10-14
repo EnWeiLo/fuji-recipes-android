@@ -9,5 +9,6 @@ class FujiApp : Application() {
     override fun onCreate() {
         super.onCreate()
         controller = AppController(this)
+        controller.checkForUpdate(manual = false)
     }
 }
