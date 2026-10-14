@@ -69,7 +69,7 @@ fun SettingsTab(c: AppController) {
         item {
             Panel {
                 Column(Modifier.padding(16.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
-                    ToggleRow("啟動時自動檢查更新", c.autoUpdate) { c.setAutoUpdate(it) }
+                    ToggleRow("啟動時自動檢查更新", c.autoUpdate) { c.changeAutoUpdate(it) }
                     Divider()
                     ValueRow("狀態", c.updateNote.ifEmpty { "尚未檢查" })
                     val latest = c.latest

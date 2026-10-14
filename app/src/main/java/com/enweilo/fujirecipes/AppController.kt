@@ -92,7 +92,7 @@ class AppController(private val app: Application) {
         private set
     val installedBuild: Long get() = Updater.installedBuild(app)
 
-    fun setAutoUpdate(on: Boolean) {
+    fun changeAutoUpdate(on: Boolean) {
         autoUpdate = on
         prefs.edit().putBoolean("autoUpdate", on).apply()
     }
