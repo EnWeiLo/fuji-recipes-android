@@ -147,4 +147,3 @@ class ShootTest {
         }
     }
 }
-// camera run
