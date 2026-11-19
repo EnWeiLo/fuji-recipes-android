@@ -40,6 +40,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Volume keys take the picture on the 拍照 tab. */
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        val c = controller
+        val volume = keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP || keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN
+        if (volume && c.tab == Tab.Shoot && c.stack.isEmpty() && c.shoot.volumeShutter) {
+            if (event.repeatCount == 0) c.shoot.shutter()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) controller.onUsbAttached()

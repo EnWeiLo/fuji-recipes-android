@@ -56,6 +56,9 @@ fun SettingsTab(c: AppController) {
             }
         }
 
+        item { SectionLabel("拍照") }
+        item { ShootSettings(c) }
+
         item { SectionLabel("更新") }
         item {
             Panel {

@@ -43,7 +43,7 @@ fun CameraTab(c: AppController, onPickRecipe: (SheetSpec) -> Unit, onAskWrite: (
     ) {
         item {
             Column(Modifier.padding(start = 6.dp, bottom = 10.dp)) {
-                Txt("相機", 34, FontWeight.Bold)
+                Txt("連線", 34, FontWeight.Bold)
                 Txt("用 OTG 線接上富士相機，寫入或讀取 C1–C7", 15, color = p.sub)
             }
         }

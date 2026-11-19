@@ -4,7 +4,7 @@ name: Render check
 on:
   workflow_dispatch:
   push:
-    branches: [polaroid-tab]
+    branches: [polaroid-tab, shoot-tab]
     paths:
       - "app/src/**"
       - "scripts/**"

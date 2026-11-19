@@ -65,7 +65,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import kotlinx.coroutines.flow.drop
 import kotlin.math.abs
 
-// ---------------- main (four tabs, swipe sideways) ----------------
+// ---------------- main (five tabs, swipe sideways) ----------------
 
 @Composable
 fun MainScreen(c: AppController, listState: LazyListState, pager: PagerState) {
@@ -157,6 +157,7 @@ fun MainScreen(c: AppController, listState: LazyListState, pager: PagerState) {
                     when (Tab.entries[page]) {
                         Tab.Recipes -> RecipeListTab(c, listState)
                         Tab.Camera -> CameraTab(c, onPickRecipe = { sheet = it }, onAskWrite = { askWrite = true })
+                        Tab.Shoot -> ShootTab(c, active = c.tab == Tab.Shoot && c.stack.isEmpty())
                         Tab.Polaroid -> PolaroidTab(c, onSheet = { sheet = it })
                         Tab.Settings -> SettingsTab(c)
                     }
@@ -173,7 +174,8 @@ private fun TabBar(c: AppController, pager: PagerState, backdrop: Backdrop, modi
     val haptic = LocalHapticFeedback.current
     BoxWithConstraints(modifier.fillMaxWidth().height(66.dp).glass(backdrop).padding(6.dp)) {
         val gap = 4.dp
-        val itemW = (maxWidth - gap * 3) / 4
+        val count = Tab.entries.size
+        val itemW = (maxWidth - gap * (count - 1)) / count
         val stepPx = with(density) { (itemW + gap).toPx() }
         // the highlight follows the finger while swiping
         Box(
@@ -188,7 +190,8 @@ private fun TabBar(c: AppController, pager: PagerState, backdrop: Backdrop, modi
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gap)) {
             val items = listOf(
                 Triple(Tab.Recipes, Glyph.Recipes, "食譜"),
-                Triple(Tab.Camera, Glyph.Camera, "相機"),
+                Triple(Tab.Camera, Glyph.Link, "連線"),
+                Triple(Tab.Shoot, Glyph.Camera, "拍照"),
                 Triple(Tab.Polaroid, Glyph.Polaroid, "拍立得"),
                 Triple(Tab.Settings, Glyph.Gear, "設定"),
             )

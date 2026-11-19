@@ -16,7 +16,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-enum class Glyph { Plus, Back, Chevron, Check, Close, Search, Edit, Trash, Recipes, Polaroid, Camera, Gear }
+enum class Glyph {
+    Plus, Back, Chevron, Check, Close, Search, Edit, Trash, Recipes, Polaroid, Camera, Gear,
+    Link, Flash, FlashOff, Timer, Grid, Level, Flip,
+}
 
 @Composable
 fun GlyphView(glyph: Glyph, color: Color, size: Dp = 22.dp, modifier: Modifier = Modifier) {
@@ -62,6 +65,36 @@ fun GlyphView(glyph: Glyph, color: Color, size: Dp = 22.dp, modifier: Modifier =
                 drawRoundRect(color, topLeft = p(3f, 7f), size = Size(18f * s, 13f * s), cornerRadius = CornerRadius(3f * s), style = stroke)
                 drawCircle(color, radius = 3.6f * s, center = p(12f, 13.5f), style = stroke)
                 poly(8f to 7f, 9.5f to 4.5f, 14.5f to 4.5f, 16f to 7f)
+            }
+            Glyph.Link -> {
+                // a USB plug on a cable
+                drawRoundRect(color, topLeft = p(8.5f, 2.5f), size = Size(7f * s, 8f * s), cornerRadius = CornerRadius(1.5f * s), style = stroke)
+                line(p(10.8f, 5f), p(10.8f, 7f)); line(p(13.2f, 5f), p(13.2f, 7f))
+                poly(12f to 10.5f, 12f to 15f, 8f to 18f, 8f to 21.5f)
+            }
+            Glyph.Flash -> poly(13.5f to 2.5f, 6f to 13.5f, 11.5f to 13.5f, 10.5f to 21.5f, 18f to 10.5f, 12.5f to 10.5f, close = true)
+            Glyph.FlashOff -> {
+                poly(13.5f to 2.5f, 6f to 13.5f, 11.5f to 13.5f, 10.5f to 21.5f, 18f to 10.5f, 12.5f to 10.5f, close = true)
+                line(p(4f, 4f), p(20f, 20f))
+            }
+            Glyph.Timer -> {
+                drawCircle(color, radius = 8f * s, center = p(12f, 13.5f), style = stroke)
+                line(p(12f, 13.5f), p(12f, 9f)); line(p(10f, 2.5f), p(14f, 2.5f))
+            }
+            Glyph.Grid -> {
+                drawRoundRect(color, topLeft = p(3.5f, 3.5f), size = Size(17f * s, 17f * s), cornerRadius = CornerRadius(2f * s), style = stroke)
+                line(p(9.2f, 4f), p(9.2f, 20f)); line(p(14.8f, 4f), p(14.8f, 20f))
+                line(p(4f, 9.2f), p(20f, 9.2f)); line(p(4f, 14.8f), p(20f, 14.8f))
+            }
+            Glyph.Level -> {
+                line(p(2.5f, 12f), p(8f, 12f)); line(p(16f, 12f), p(21.5f, 12f))
+                drawCircle(color, radius = 3.5f * s, center = p(12f, 12f), style = stroke)
+            }
+            Glyph.Flip -> {
+                poly(4f to 10f, 6.5f to 6.5f, 17.5f to 6.5f)
+                poly(15f to 4f, 17.5f to 6.5f, 15f to 9f)
+                poly(20f to 14f, 17.5f to 17.5f, 6.5f to 17.5f)
+                poly(9f to 20f, 6.5f to 17.5f, 9f to 15f)
             }
             Glyph.Gear -> {
                 drawCircle(color, radius = 3f * s, center = p(12f, 12f), style = stroke)

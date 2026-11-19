@@ -24,7 +24,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class Tab { Recipes, Camera, Polaroid, Settings }
+/** Camera = 連線 (writing recipes to the Fujifilm camera), Shoot = 拍照 (the phone camera). */
+enum class Tab { Recipes, Camera, Shoot, Polaroid, Settings }
 
 sealed interface Screen {
     data class Detail(val id: String) : Screen
@@ -48,6 +49,9 @@ class AppController(private val app: Application) {
 
     /** The 拍立得 tab keeps its own state (photos, styles, saving). */
     val polaroid = PolaroidController(app, scope) { text -> showToast(text) }
+
+    /** The 拍照 tab: phone camera with recipe looks. */
+    val shoot = com.enweilo.fujirecipes.shoot.ShootController(app, scope, { text -> showToast(text) }) { recipes }
 
     // ---------------- general state ----------------
 
@@ -217,6 +221,12 @@ class AppController(private val app: Application) {
 
     fun removeDraftPhoto(id: String) {
         draft = draft.copy(photos = draft.photos - id)
+    }
+
+    /** Adds a recipe directly (used by tests). */
+    fun saveRecipeForTest(r: Recipe) {
+        recipes = listOf(r) + recipes.filter { it.id != r.id }
+        persist()
     }
 
     fun saveDraft() {
