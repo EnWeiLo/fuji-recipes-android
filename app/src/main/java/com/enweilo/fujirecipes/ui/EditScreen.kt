@@ -105,20 +105,20 @@ fun EditScreen(c: AppController) {
                             }
                         }
                         Divider()
-                        PickRow("R 偏移", r.shiftR) { choose("R 偏移", Tables.SHIFT, r.shiftR) { x, v -> x.copy(shiftR = v) } }; Divider()
-                        PickRow("B 偏移", r.shiftB) { choose("B 偏移", Tables.SHIFT, r.shiftB) { x, v -> x.copy(shiftB = v) } }
+                        StepSlider("R 偏移", Tables.SHIFT, r.shiftR) { v -> c.updateDraft { it.copy(shiftR = v) } }; Divider()
+                        StepSlider("B 偏移", Tables.SHIFT, r.shiftB) { v -> c.updateDraft { it.copy(shiftB = v) } }
                     }
                 }
 
                 item { SectionLabel("影像調整") }
                 item {
                     Panel {
-                        PickRow("亮部色調", r.highlight) { choose("亮部色調", Tables.TONE, r.highlight) { x, v -> x.copy(highlight = v) } }; Divider()
-                        PickRow("陰影色調", r.shadow) { choose("陰影色調", Tables.TONE, r.shadow) { x, v -> x.copy(shadow = v) } }; Divider()
-                        PickRow("色彩", r.color) { choose("色彩", Tables.PM4, r.color) { x, v -> x.copy(color = v) } }; Divider()
-                        PickRow("銳利度", r.sharpness) { choose("銳利度", Tables.PM4, r.sharpness) { x, v -> x.copy(sharpness = v) } }; Divider()
-                        PickRow("清晰度", r.clarity) { choose("清晰度", Tables.CLARITY, r.clarity) { x, v -> x.copy(clarity = v) } }; Divider()
-                        PickRow("高 ISO 降噪", r.nr) { choose("高 ISO 降噪", Tables.PM4, r.nr) { x, v -> x.copy(nr = v) } }
+                        StepSlider("亮部色調", Tables.TONE, r.highlight) { v -> c.updateDraft { it.copy(highlight = v) } }; Divider()
+                        StepSlider("陰影色調", Tables.TONE, r.shadow) { v -> c.updateDraft { it.copy(shadow = v) } }; Divider()
+                        StepSlider("色彩", Tables.PM4, r.color) { v -> c.updateDraft { it.copy(color = v) } }; Divider()
+                        StepSlider("銳利度", Tables.PM4, r.sharpness) { v -> c.updateDraft { it.copy(sharpness = v) } }; Divider()
+                        StepSlider("清晰度", Tables.CLARITY, r.clarity) { v -> c.updateDraft { it.copy(clarity = v) } }; Divider()
+                        StepSlider("高 ISO 降噪", Tables.PM4, r.nr) { v -> c.updateDraft { it.copy(nr = v) } }
                     }
                 }
 

@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -49,30 +50,73 @@ import com.enweilo.fujirecipes.data.Recipe
 import com.enweilo.fujirecipes.data.Tables
 import com.enweilo.fujirecipes.data.toneFraction
 import com.kyant.backdrop.Backdrop
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import kotlinx.coroutines.flow.drop
+import kotlin.math.abs
 
-// ---------------- main (three tabs) ----------------
+// ---------------- main (four tabs, swipe sideways) ----------------
 
 @Composable
-fun MainScreen(c: AppController, listState: LazyListState) {
+fun MainScreen(c: AppController, listState: LazyListState, pager: PagerState) {
     var sheet by remember { mutableStateOf<SheetSpec?>(null) }
     var askWrite by remember { mutableStateOf(false) }
     androidx.activity.compose.BackHandler(enabled = sheet != null || askWrite) { sheet = null; askWrite = false }
+
+    // The tab bar, the buttons and a swipe all move the same pager.
+    var firstSync by remember { mutableStateOf(true) }
+    LaunchedEffect(c.tab) {
+        val instant = firstSync
+        firstSync = false
+        val want = c.tab.ordinal
+        if (pager.currentPage != want) {
+            if (instant) pager.scrollToPage(want) else pager.animateScrollToPage(want)
+        }
+    }
+    LaunchedEffect(pager) {
+        snapshotFlow { pager.settledPage }.drop(1).collect { page ->
+            if (page != c.tab.ordinal) c.tab = Tab.entries[page]
+        }
+    }
+
     GlassScreen(
         bars = { backdrop ->
-            AnimatedVisibility(
-                c.tab == Tab.Recipes,
-                modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end = 20.dp, bottom = 96.dp),
-                enter = fadeIn(tween(220, delayMillis = 80)) + scaleIn(tween(220, delayMillis = 80), initialScale = 0.85f),
-                exit = fadeOut(tween(120)) + scaleOut(tween(120), targetScale = 0.85f),
-            ) {
-                GlassCircleButton(Glyph.Plus, backdrop, onClick = { c.startNew() }, size = 56.dp, accent = true)
+            val pos = { pager.currentPage + pager.currentPageOffsetFraction }
+            val fabVisible by remember { derivedStateOf { pos() < 1f } }
+            if (fabVisible) {
+                GlassCircleButton(
+                    Glyph.Plus, backdrop, onClick = { if (pos() < 0.5f) c.startNew() },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .navigationBarsPadding()
+                        .padding(end = 20.dp, bottom = 96.dp)
+                        .graphicsLayer {
+                            val k = (1f - pos()).coerceIn(0f, 1f)
+                            alpha = k
+                            scaleX = 0.8f + 0.2f * k
+                            scaleY = 0.8f + 0.2f * k
+                        },
+                    size = 56.dp, accent = true,
+                )
             }
-            AnimatedVisibility(
-                c.tab == Tab.Polaroid,
-                modifier = Modifier.align(Alignment.TopCenter),
-                enter = fadeIn(tween(220, delayMillis = 80)),
-                exit = fadeOut(tween(120)),
-            ) { PolaroidActions(c, backdrop) }
+            val polaroidVisible by remember { derivedStateOf { abs(pos() - Tab.Polaroid.ordinal) < 1f } }
+            if (polaroidVisible) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .graphicsLayer { alpha = (1f - abs(pos() - Tab.Polaroid.ordinal)).coerceIn(0f, 1f) },
+                ) { PolaroidActions(c, backdrop) }
+            }
             if (c.updateStatus.isNotEmpty()) {
                 Box(
                     Modifier
@@ -91,7 +135,7 @@ fun MainScreen(c: AppController, listState: LazyListState) {
                 "更新",
                 onConfirm = { c.startUpdate() }, onDismiss = { c.dismissUpdatePrompt() },
             )
-            TabBar(c, backdrop, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 24.dp, vertical = 14.dp))
+            TabBar(c, pager, backdrop, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 24.dp, vertical = 14.dp))
             PickerSheet(sheet, backdrop) { sheet = null }
             val target = c.recipes.firstOrNull { it.id == c.camRecipeId }
             ConfirmDialog(
@@ -100,20 +144,22 @@ fun MainScreen(c: AppController, listState: LazyListState) {
             )
         },
         content = {
-            AnimatedContent(
-                targetState = c.tab,
-                transitionSpec = {
-                    val dir = if (targetState.ordinal >= initialState.ordinal) 1 else -1
-                    (fadeIn(tween(240, delayMillis = 70)) + slideInHorizontally(tween(300)) { dir * it / 10 }) togetherWith
-                        (fadeOut(tween(120)) + slideOutHorizontally(tween(300)) { -dir * it / 10 })
-                },
-                label = "tab",
-            ) { tab ->
-                when (tab) {
-                    Tab.Recipes -> RecipeListTab(c, listState)
-                    Tab.Camera -> CameraTab(c, onPickRecipe = { sheet = it }, onAskWrite = { askWrite = true })
-                    Tab.Polaroid -> PolaroidTab(c, onSheet = { sheet = it })
-                    Tab.Settings -> SettingsTab(c)
+            HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
+                Box(
+                    Modifier.fillMaxSize().graphicsLayer {
+                        val off = abs((pager.currentPage - page) + pager.currentPageOffsetFraction)
+                        alpha = 1f - 0.45f * off.coerceIn(0f, 1f)
+                        val k = 1f - 0.05f * off.coerceIn(0f, 1f)
+                        scaleX = k
+                        scaleY = k
+                    },
+                ) {
+                    when (Tab.entries[page]) {
+                        Tab.Recipes -> RecipeListTab(c, listState)
+                        Tab.Camera -> CameraTab(c, onPickRecipe = { sheet = it }, onAskWrite = { askWrite = true })
+                        Tab.Polaroid -> PolaroidTab(c, onSheet = { sheet = it })
+                        Tab.Settings -> SettingsTab(c)
+                    }
                 }
             }
         },
@@ -121,33 +167,50 @@ fun MainScreen(c: AppController, listState: LazyListState) {
 }
 
 @Composable
-private fun TabBar(c: AppController, backdrop: Backdrop, modifier: Modifier) {
+private fun TabBar(c: AppController, pager: PagerState, backdrop: Backdrop, modifier: Modifier) {
     val p = Pal
-    Row(
-        modifier.fillMaxWidth().height(66.dp).glass(backdrop).padding(6.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        val items = listOf(
-            Triple(Tab.Recipes, Glyph.Recipes, "食譜"),
-            Triple(Tab.Camera, Glyph.Camera, "相機"),
-            Triple(Tab.Polaroid, Glyph.Polaroid, "拍立得"),
-            Triple(Tab.Settings, Glyph.Gear, "設定"),
+    val density = LocalDensity.current
+    val haptic = LocalHapticFeedback.current
+    BoxWithConstraints(modifier.fillMaxWidth().height(66.dp).glass(backdrop).padding(6.dp)) {
+        val gap = 4.dp
+        val itemW = (maxWidth - gap * 3) / 4
+        val stepPx = with(density) { (itemW + gap).toPx() }
+        // the highlight follows the finger while swiping
+        Box(
+            Modifier
+                .width(itemW)
+                .fillMaxHeight()
+                .graphicsLayer { translationX = (pager.currentPage + pager.currentPageOffsetFraction) * stepPx }
+                .clip(CircleShape)
+                .background(p.accent.copy(alpha = 0.16f)),
         )
-        for ((tab, glyph, label) in items) {
-            val on = c.tab == tab
-            Column(
-                Modifier
-                    .weight(1f)
-                    .fillMaxSize()
-                    .clip(CircleShape)
-                    .background(animateColorAsState(if (on) p.accent.copy(alpha = 0.16f) else Color.Transparent, tween(250), label = "bg").value)
-                    .tap { c.tab = tab },
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                val tint by animateColorAsState(if (on) p.accent else p.sub, tween(250), label = "tint")
-                GlyphView(glyph, tint, 22.dp)
-                Txt(label, 11, FontWeight.Medium, tint, Modifier.padding(top = 2.dp))
+        val pos = pager.currentPage + pager.currentPageOffsetFraction
+        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+            val items = listOf(
+                Triple(Tab.Recipes, Glyph.Recipes, "食譜"),
+                Triple(Tab.Camera, Glyph.Camera, "相機"),
+                Triple(Tab.Polaroid, Glyph.Polaroid, "拍立得"),
+                Triple(Tab.Settings, Glyph.Gear, "設定"),
+            )
+            for ((i, item) in items.withIndex()) {
+                val (tab, glyph, label) = item
+                val near = (1f - abs(pos - i)).coerceIn(0f, 1f)
+                val tint = lerp(p.sub, p.accent, near)
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxSize()
+                        .clip(CircleShape)
+                        .tap {
+                            if (c.tab != tab) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            c.tab = tab
+                        },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    GlyphView(glyph, tint, 22.dp, Modifier.graphicsLayer { scaleX = 1f + 0.12f * near; scaleY = 1f + 0.12f * near })
+                    Txt(label, 11, FontWeight.Medium, tint, Modifier.padding(top = 2.dp))
+                }
             }
         }
     }
@@ -192,15 +255,17 @@ private fun RecipeListTab(c: AppController, listState: LazyListState) {
                 )
             }
         }
-        items(shownRecipes, key = { it.id }) { recipe -> RecipeCard(c, recipe) }
+        itemsIndexed(shownRecipes, key = { _, r -> r.id }) { index, recipe ->
+            RecipeCard(c, recipe, Modifier.animateItem().appear(recipe.id, index))
+        }
     }
 }
 
 @Composable
-private fun RecipeCard(c: AppController, r: Recipe) {
+private fun RecipeCard(c: AppController, r: Recipe, modifier: Modifier = Modifier) {
     val p = Pal
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
             .background(p.card)

@@ -69,6 +69,15 @@ class AppController(private val app: Application) {
         toast = ToastMessage(text, ++toastCounter)
     }
 
+    /** Slow drifting colour blobs behind the screens. */
+    var bgMotion by mutableStateOf(prefs.getBoolean("bgMotion", true))
+        private set
+
+    fun changeBgMotion(on: Boolean) {
+        bgMotion = on
+        prefs.edit().putBoolean("bgMotion", on).apply()
+    }
+
     fun setTheme(mode: Int) {
         themeMode = mode
         prefs.edit().putInt("theme", mode).apply()

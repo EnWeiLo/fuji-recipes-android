@@ -49,6 +49,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
@@ -81,7 +82,10 @@ fun Txt(
     BasicText(
         text,
         modifier,
-        style = TextStyle(color = color, fontSize = size.sp, fontWeight = weight, textAlign = align),
+        style = TextStyle(
+            color = color, fontSize = size.sp, fontWeight = weight, textAlign = align,
+            letterSpacing = if (size >= 24) (-0.6).sp else if (size <= 12) 0.2.sp else androidx.compose.ui.unit.TextUnit.Unspecified,
+        ),
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
     )
@@ -104,6 +108,16 @@ fun GlassScreen(
 ) {
     val backdrop = rememberLayerBackdrop()
     val p = Pal
+    val drift: androidx.compose.runtime.State<Float>? = if (LocalMotion.current) {
+        androidx.compose.animation.core.rememberInfiniteTransition(label = "drift").animateFloat(
+            0f, 1f,
+            androidx.compose.animation.core.infiniteRepeatable(
+                androidx.compose.animation.core.tween(24000, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+                androidx.compose.animation.core.RepeatMode.Reverse,
+            ),
+            label = "d",
+        )
+    } else null
     Box(Modifier.fillMaxSize()) {
         Box(
             Modifier
@@ -111,15 +125,16 @@ fun GlassScreen(
                 .layerBackdrop(backdrop)
                 .background(p.bg)
                 .drawBehind {
+                    val d = drift?.value ?: 0.5f
+                    val ca = Offset(size.width * (1.0f - 0.35f * d), size.height * (0.02f + 0.14f * d))
+                    val cb = Offset(size.width * (0.0f + 0.4f * d), size.height * (0.80f - 0.14f * d))
                     drawCircle(
-                        Brush.radialGradient(listOf(p.blobA, Color.Transparent), Offset(size.width * 0.9f, size.height * 0.05f), size.width * 0.9f),
-                        radius = size.width * 0.9f,
-                        center = Offset(size.width * 0.9f, size.height * 0.05f),
+                        Brush.radialGradient(listOf(p.blobA, Color.Transparent), ca, size.width * 0.95f),
+                        radius = size.width * 0.95f, center = ca,
                     )
                     drawCircle(
-                        Brush.radialGradient(listOf(p.blobB, Color.Transparent), Offset(size.width * 0.05f, size.height * 0.75f), size.width * 1.0f),
-                        radius = size.width * 1.0f,
-                        center = Offset(size.width * 0.05f, size.height * 0.75f),
+                        Brush.radialGradient(listOf(p.blobB, Color.Transparent), cb, size.width * 1.05f),
+                        radius = size.width * 1.05f, center = cb,
                     )
                 },
             content = content,
@@ -209,7 +224,11 @@ fun Panel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> 
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
             .background(p.card)
-            .border(0.5.dp, p.line, RoundedCornerShape(22.dp)),
+            .border(
+                0.7.dp,
+                Brush.verticalGradient(listOf(if (p.dark) Color(0x33FFFFFF) else Color(0xCCFFFFFF), p.line)),
+                RoundedCornerShape(22.dp),
+            ),
         content = content,
     )
 }
@@ -234,9 +253,7 @@ fun ValueRow(label: String, value: String, meter: Float? = null) {
     ) {
         Txt(label, 16, color = p.text, modifier = Modifier.weight(1f))
         if (meter != null) {
-            Box(Modifier.width(52.dp).height(4.dp).clip(CircleShape).background(p.line)) {
-                Box(Modifier.fillMaxWidth(meter).height(4.dp).clip(CircleShape).background(p.accent))
-            }
+            Meter(meter)
             Box(Modifier.width(12.dp))
         }
         Txt(value, 16, FontWeight.Medium, p.sub, maxLines = 1)
@@ -320,49 +337,67 @@ fun PhotoImage(controller: AppController, id: String, maxSide: Int, modifier: Mo
 
 class SheetSpec(val title: String, val options: List<String>, val selected: Int, val onPick: (Int) -> Unit)
 
-/** Bottom sheet made of glass with a list of choices. */
+/** Bottom sheet made of glass with a list of choices. Slides up, and slides back down when closed. */
 @Composable
 fun BoxScope.PickerSheet(spec: SheetSpec?, backdrop: Backdrop, onDismiss: () -> Unit) {
-    if (spec == null) return
     val p = Pal
     val none = remember { MutableInteractionSource() }
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = if (p.dark) 0.5f else 0.28f))
-            .clickable(interactionSource = none, indication = null, onClick = onDismiss),
-    )
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (spec.selected - 3).coerceAtLeast(0))
-    Column(
-        Modifier
-            .align(Alignment.BottomCenter)
-            .navigationBarsPadding()
-            .padding(horizontal = 10.dp, vertical = 10.dp)
-            .fillMaxWidth()
-            .glass(backdrop, radius = 32.dp, fill = p.sheet)
-            .clickable(interactionSource = none, indication = null, onClick = {}),
+    var last by remember { mutableStateOf(spec) }
+    if (spec != null) last = spec
+    val visible = spec != null
+    val scrim by androidx.compose.animation.core.animateFloatAsState(if (visible) 1f else 0f, androidx.compose.animation.core.tween(240), label = "scrim")
+    if (scrim > 0.001f) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = (if (p.dark) 0.5f else 0.28f) * scrim))
+                .clickable(interactionSource = none, indication = null, enabled = visible, onClick = onDismiss),
+        )
+    }
+    androidx.compose.animation.AnimatedVisibility(
+        visible,
+        modifier = Modifier.align(Alignment.BottomCenter),
+        enter = androidx.compose.animation.slideInVertically(androidx.compose.animation.core.spring(dampingRatio = 0.86f, stiffness = 380f)) { it } +
+            androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(160)),
+        exit = androidx.compose.animation.slideOutVertically(androidx.compose.animation.core.tween(220)) { it } +
+            androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200)),
     ) {
-        Txt(spec.title, 17, FontWeight.SemiBold, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp, end = 24.dp))
-        LazyColumn(Modifier.heightIn(max = 400.dp), state = listState, contentPadding = PaddingValues(bottom = 12.dp)) {
-            itemsIndexed(spec.options) { index, label ->
-                val chosen = index == spec.selected
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .tap { spec.onPick(index); onDismiss() }
-                        .padding(horizontal = 24.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Txt(label, 17, if (chosen) FontWeight.SemiBold else FontWeight.Normal, if (chosen) p.accent else p.text, Modifier.weight(1f))
-                    if (chosen) GlyphView(Glyph.Check, p.accent, 20.dp)
+        val s = last ?: return@AnimatedVisibility
+        val listState = rememberLazyListState(initialFirstVisibleItemIndex = (s.selected - 3).coerceAtLeast(0))
+        Column(
+            Modifier
+                .navigationBarsPadding()
+                .padding(horizontal = 10.dp, vertical = 10.dp)
+                .fillMaxWidth()
+                .glass(backdrop, radius = 32.dp, fill = p.sheet)
+                .clickable(interactionSource = none, indication = null, onClick = {}),
+        ) {
+            Box(
+                Modifier.align(Alignment.CenterHorizontally).padding(top = 10.dp)
+                    .width(36.dp).height(4.dp).clip(CircleShape).background(p.sub.copy(alpha = 0.35f)),
+            )
+            Txt(s.title, 17, FontWeight.SemiBold, modifier = Modifier.padding(start = 24.dp, top = 14.dp, bottom = 8.dp, end = 24.dp))
+            LazyColumn(Modifier.heightIn(max = 400.dp), state = listState, contentPadding = PaddingValues(bottom = 12.dp)) {
+                itemsIndexed(s.options) { index, label ->
+                    val chosen = index == s.selected
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .tap { s.onPick(index); onDismiss() }
+                            .padding(horizontal = 24.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Txt(label, 17, if (chosen) FontWeight.SemiBold else FontWeight.Normal, if (chosen) p.accent else p.text, Modifier.weight(1f))
+                        if (chosen) GlyphView(Glyph.Check, p.accent, 20.dp)
+                    }
                 }
             }
         }
     }
 }
 
-/** Centered question with two buttons. */
+/** Centered question with two buttons. Fades in with a small pop. */
 @Composable
 fun BoxScope.ConfirmDialog(
     show: Boolean,
@@ -373,20 +408,27 @@ fun BoxScope.ConfirmDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    if (!show) return
     val p = Pal
     val none = remember { MutableInteractionSource() }
+    val scrim by androidx.compose.animation.core.animateFloatAsState(if (show) 1f else 0f, androidx.compose.animation.core.tween(200), label = "dlgScrim")
+    if (scrim <= 0.001f) return
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.4f))
-            .clickable(interactionSource = none, indication = null, onClick = onDismiss),
+            .background(Color.Black.copy(alpha = 0.4f * scrim))
+            .clickable(interactionSource = none, indication = null, enabled = show, onClick = onDismiss),
         contentAlignment = Alignment.Center,
     ) {
         Column(
             Modifier
                 .padding(32.dp)
                 .fillMaxWidth()
+                .graphicsLayer {
+                    alpha = scrim
+                    val k = 0.9f + 0.1f * scrim
+                    scaleX = k
+                    scaleY = k
+                }
                 .clip(RoundedCornerShape(28.dp))
                 .background(if (p.dark) Color(0xFF26262C) else Color(0xFFFBFAF8))
                 .clickable(interactionSource = none, indication = null, onClick = {})

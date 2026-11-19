@@ -630,39 +630,7 @@ private fun DateSection(pc: PolaroidController, onSheet: (SheetSpec) -> Unit) {
 // ---------------- small controls ----------------
 
 @Composable
-private fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
-    val p = Pal
-    BoxWithConstraints(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(p.field)
-            .padding(3.dp),
-    ) {
-        val segW: Dp = maxWidth / options.size
-        val x by animateDpAsState(segW * selected, tween(220), label = "segment")
-        Box(
-            Modifier
-                .offset(x = x)
-                .width(segW)
-                .height(40.dp)
-                .clip(RoundedCornerShape(13.dp))
-                .background(p.accent),
-        )
-        Row {
-            options.forEachIndexed { i, label ->
-                val on = i == selected
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .height(40.dp)
-                        .tap { onSelect(i) },
-                    contentAlignment = Alignment.Center,
-                ) { Txt(label, 15, FontWeight.Medium, if (on) Color.White else p.text, maxLines = 1) }
-            }
-        }
-    }
-}
+private fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit) = SegmentedControl(options, selected, onSelect)
 
 /** Choices laid out in rows of [columns]. */
 @Composable
@@ -693,8 +661,18 @@ private fun Chips(options: List<String>, selected: Int, columns: Int, onSelect: 
 @Composable
 internal fun ToggleRow(label: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     val p = Pal
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val bg by androidx.compose.animation.animateColorAsState(if (checked) p.accent else p.line.copy(alpha = 0.22f), tween(220), label = "toggleBg")
+    val thumbX by androidx.compose.animation.core.animateDpAsState(
+        if (checked) 20.dp else 0.dp,
+        androidx.compose.animation.core.spring(dampingRatio = 0.62f, stiffness = 600f),
+        label = "toggleX",
+    )
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 52.dp).tap(enabled) { onChange(!checked) }.padding(horizontal = 16.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().heightIn(min = 52.dp).tap(enabled) {
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+            onChange(!checked)
+        }.padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Txt(label, 16, modifier = Modifier.weight(1f))
@@ -703,11 +681,17 @@ internal fun ToggleRow(label: String, checked: Boolean, enabled: Boolean = true,
                 .width(51.dp)
                 .height(31.dp)
                 .clip(CircleShape)
-                .background(if (checked) p.accent else p.line.copy(alpha = 0.22f))
+                .background(bg)
                 .padding(2.dp),
-            contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart,
         ) {
-            Box(Modifier.size(27.dp).clip(CircleShape).background(Color.White))
+            Box(
+                Modifier
+                    .offset(x = thumbX)
+                    .size(27.dp)
+                    .shadow(2.dp, CircleShape)
+                    .clip(CircleShape)
+                    .background(Color.White),
+            )
         }
     }
 }

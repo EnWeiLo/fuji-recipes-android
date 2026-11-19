@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.enweilo.fujirecipes.AppController
@@ -50,8 +51,16 @@ fun CameraTab(c: AppController, onPickRecipe: (SheetSpec) -> Unit, onAskWrite: (
         item {
             Panel {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val pulse by androidx.compose.animation.core.rememberInfiniteTransition(label = "pulse").animateFloat(
+                        1f, 0.25f,
+                        androidx.compose.animation.core.infiniteRepeatable(
+                            androidx.compose.animation.core.tween(700),
+                            androidx.compose.animation.core.RepeatMode.Reverse,
+                        ),
+                        label = "p",
+                    )
                     Box(
-                        Modifier.size(12.dp).clip(CircleShape).background(
+                        Modifier.size(12.dp).graphicsLayer { alpha = if (c.camStatus == CamStatus.Connecting) pulse else 1f }.clip(CircleShape).background(
                             when (c.camStatus) {
                                 CamStatus.Connected -> Color(0xFF34C759)
                                 CamStatus.Connecting -> Color(0xFFFFB020)

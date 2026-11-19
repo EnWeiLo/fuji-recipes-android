@@ -48,20 +48,11 @@ fun SettingsTab(c: AppController) {
         item { SectionLabel("外觀") }
         item {
             Panel {
-                Row(Modifier.fillMaxWidth().padding(8.dp).clip(RoundedCornerShape(16.dp)).background(p.field).padding(3.dp)) {
-                    listOf("跟隨系統", "淺色", "深色").forEachIndexed { i, label ->
-                        val on = c.themeMode == i
-                        Box(
-                            Modifier
-                                .weight(1f)
-                                .height(40.dp)
-                                .clip(RoundedCornerShape(13.dp))
-                                .background(if (on) p.accent else Color.Transparent)
-                                .tap { c.setTheme(i) },
-                            contentAlignment = Alignment.Center,
-                        ) { Txt(label, 15, FontWeight.Medium, if (on) Color.White else p.text) }
-                    }
+                Box(Modifier.padding(10.dp)) {
+                    SegmentedControl(listOf("跟隨系統", "淺色", "深色"), c.themeMode) { c.setTheme(it) }
                 }
+                Divider()
+                ToggleRow("背景緩慢流動", c.bgMotion) { c.changeBgMotion(it) }
             }
         }
 

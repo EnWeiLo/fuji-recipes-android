@@ -55,13 +55,13 @@ val LightPalette = Palette(
     blobB = Color(0x55A9C7E8),
     text = Color(0xFF1B1B1F),
     sub = Color(0xFF6C6C75),
-    card = Color(0xB8FFFFFF),
+    card = Color(0xD9FFFFFF),
     line = Color(0x14000000),
     field = Color(0x0F000000),
     accent = Color(0xFFF0643A),
     glassFill = Color(0x66FFFFFF),
     glassFallback = Color(0xF2FAFAFA),
-    sheet = Color(0xB3FFFFFF),
+    sheet = Color(0xC7FFFFFF),
     danger = Color(0xFFD93A3A),
 )
 
@@ -72,7 +72,7 @@ val DarkPalette = Palette(
     blobB = Color(0x553A5C8A),
     text = Color(0xFFF2F2F5),
     sub = Color(0xFF9B9BA6),
-    card = Color(0xB3202026),
+    card = Color(0xC81F1F25),
     line = Color(0x1AFFFFFF),
     field = Color(0x1AFFFFFF),
     accent = Color(0xFFFF7448),
@@ -126,7 +126,16 @@ fun Modifier.glass(
 fun Modifier.tap(enabled: Boolean = true, onClick: () -> Unit): Modifier {
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
+    val scale by androidx.compose.animation.core.animateFloatAsState(
+        if (pressed) 0.96f else 1f,
+        androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 520f),
+        label = "press",
+    )
     return this
-        .graphicsLayer { alpha = if (!enabled) 0.4f else if (pressed) 0.6f else 1f }
+        .graphicsLayer {
+            alpha = if (!enabled) 0.4f else if (pressed) 0.78f else 1f
+            scaleX = scale
+            scaleY = scale
+        }
         .clickable(interactionSource = source, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
 }
