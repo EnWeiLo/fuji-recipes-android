@@ -1,5 +1,6 @@
 package com.enweilo.fujirecipes.ui
 
+import androidx.compose.animation.core.animateFloat
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
