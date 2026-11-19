@@ -33,6 +33,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -135,7 +136,11 @@ fun MainScreen(c: AppController, listState: LazyListState, pager: PagerState) {
                 "更新",
                 onConfirm = { c.startUpdate() }, onDismiss = { c.dismissUpdatePrompt() },
             )
-            TabBar(c, pager, backdrop, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 24.dp, vertical = 14.dp))
+            // over the black viewfinder the bar switches to its dark look
+            val nearShoot by remember { derivedStateOf { abs(pos() - Tab.Shoot.ordinal) < 0.5f } }
+            CompositionLocalProvider(LocalPalette provides if (nearShoot) DarkPalette else Pal) {
+                TabBar(c, pager, backdrop, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 24.dp, vertical = 14.dp))
+            }
             PickerSheet(sheet, backdrop) { sheet = null }
             val target = c.recipes.firstOrNull { it.id == c.camRecipeId }
             ConfirmDialog(

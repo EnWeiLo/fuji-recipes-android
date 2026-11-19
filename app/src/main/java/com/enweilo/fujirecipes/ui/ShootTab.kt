@@ -107,6 +107,7 @@ fun ShootTab(c: AppController, active: Boolean) {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
     val askCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
+    LaunchedEffect(active) { if (active) s.refreshLuts() }
 
     // Hold the screen upright while shooting; the photo still comes out landscape when the phone is turned.
     val activity = context as? ComponentActivity
@@ -640,6 +641,7 @@ private fun Spinner() {
 fun ShootSettings(c: AppController) {
     val s = c.shoot
     val p = Pal
+    LaunchedEffect(Unit) { s.refreshLuts() }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         s.importLuts(uris)
     }

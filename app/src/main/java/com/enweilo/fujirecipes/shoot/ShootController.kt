@@ -96,6 +96,15 @@ class ShootController(
     private val gl = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val processor = PhotoProcessor(luts)
 
+    /** Looks at the LUT folder again (cheap). */
+    fun refreshLuts() {
+        val now = luts.installed()
+        if (now != installed) {
+            installed = now
+            lutVersion++
+        }
+    }
+
     fun probeLutSize() {
         if (lutSize >= 0 || lutBusy) return
         scope.launch {
