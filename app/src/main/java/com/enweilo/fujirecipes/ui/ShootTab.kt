@@ -88,6 +88,15 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.exp
+import kotlin.math.ln
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
@@ -426,7 +435,7 @@ private fun Viewfinder(c: AppController, active: Boolean, ui: Turn) {
                         val start = down.position
                         var mode = 0 // 0 undecided, 1 exposure, 2 zoom, 3 sideways
                         val startEv = s.ev
-                        val startZoom = s.zoom
+                        val startZoom = s.zoomTarget ?: s.shownZoom
                         var zoomAcc = 1f
                         var lastEv = s.ev
                         var lastZoomStep = floor(s.shownZoom * 2f)
@@ -437,7 +446,8 @@ private fun Viewfinder(c: AppController, active: Boolean, ui: Turn) {
                             if (pressed.size >= 2) {
                                 mode = 2
                                 zoomAcc *= e.calculateZoom()
-                                s.changeZoom(startZoom * zoomAcc)
+                                s.setShownZoom(startZoom * zoomAcc, live = true)
+                                s.pingZoomRing()
                                 val step = floor(s.shownZoom * 2f)
                                 if (step != lastZoomStep) { lastZoomStep = step; s.feedback.tick() }
                                 e.changes.forEach { it.consume() }
@@ -455,6 +465,7 @@ private fun Viewfinder(c: AppController, active: Boolean, ui: Turn) {
                                 pressed[0].consume()
                             }
                         }
+                        if (mode == 2) s.zoomTarget?.let { s.setShownZoom(it, live = false) }
                         if (mode == 0) {
                             focusAt = start
                             focusStamp = System.currentTimeMillis()
@@ -567,7 +578,7 @@ private fun Viewfinder(c: AppController, active: Boolean, ui: Turn) {
                 ) { Txt("按住看原圖", 12, FontWeight.SemiBold, Color.White) }
             }
 
-            ZoomChips(s, ui, Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp))
+            ZoomControl(s, ui, Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp))
 
             // countdown: each second pops in
             Box(Modifier.align(Alignment.Center).turned(ui.quarter, ui.angle)) {
@@ -710,6 +721,209 @@ private fun ZoomChips(s: ShootController, ui: Turn, modifier: Modifier) {
                 }
             }
         }
+    }
+}
+
+
+/** A mark on the zoom ring: a lens of the phone, or a classic Fujinon prime focal length. */
+private class RingMark(val zoom: Float, val lens: Boolean)
+
+/** Fujinon primes people know by heart; the ring holds still on them for a moment. */
+private val PRIMES = listOf(23f, 35f, 50f)
+
+/**
+ * Lens buttons that open into a dial: drag the buttons (or hold them, or pinch the viewfinder) and a ruler
+ * with equivalent focal lengths slides under a fixed pointer. It folds away by itself when left alone.
+ */
+@Composable
+private fun ZoomControl(s: ShootController, ui: Turn, modifier: Modifier) {
+    if (!s.cameraReady) return
+    var open by remember { mutableStateOf(false) }
+    var dragging by remember { mutableStateOf(false) }
+    var lastTouch by remember { mutableLongStateOf(0L) }
+    var chips by remember { mutableStateOf(Rect.Zero) }
+
+    LaunchedEffect(s.zoomPing) {
+        if (s.zoomPing > 0) { open = true; lastTouch = System.currentTimeMillis() }
+    }
+    LaunchedEffect(open, dragging, lastTouch) {
+        if (open && !dragging) {
+            delay(1500)
+            open = false
+            s.forgetZoomTarget()
+        }
+    }
+
+    val (lo, hi) = s.ringRange
+    val eq = if (s.useFront) 0f else s.mainEqMm
+    val lensStops = if (!s.useFront && s.lenses.size >= 2) s.lenses.map { it.ratio } else listOf(1f).filter { it in lo..hi }
+    val marks = remember(lensStops, eq, lo, hi) {
+        val m = lensStops.map { RingMark(it, true) }.toMutableList()
+        if (eq > 0f) for (mm in PRIMES) {
+            val z = mm / eq
+            if (z in lo..hi && lensStops.none { abs(ln(it / z)) < 0.07f }) m += RingMark(z, false)
+        }
+        m.sortedBy { it.zoom }
+    }
+    val shown = s.zoomTarget ?: s.shownZoom
+    val digital = shown > (lensStops.maxOrNull() ?: 1f) * 1.02f ||
+        (s.lenses.size < 2 && shown > 1.02f)
+
+    // the finger works in an unsnapped value; what is shown sticks to marks it passes close to
+    var raw by remember { mutableFloatStateOf(ln(shown)) }
+    var stuck by remember { mutableStateOf<RingMark?>(null) }
+    var widthPx by remember { mutableFloatStateOf(1f) }
+    val marksNow by rememberUpdatedState(marks)
+    val range by rememberUpdatedState(lo to hi)
+
+    fun dragBy(dx: Float) {
+        val perLn = widthPx * 0.42f
+        val (a, b) = range
+        val before = s.zoomTarget ?: s.shownZoom
+        raw = (raw - dx / perLn).coerceIn(ln(a), ln(b))
+        val near = marksNow.minByOrNull { abs(ln(it.zoom) - raw) }?.takeIf { abs(ln(it.zoom) - raw) < 0.035f }
+        val value = near?.zoom ?: exp(raw)
+        if (near != null && near !== stuck) s.feedback.click()
+        stuck = near
+        if (near == null && floor(ln(before) / 0.08f) != floor(ln(value) / 0.08f)) s.feedback.tick()
+        s.setShownZoom(value, live = true)
+        lastTouch = System.currentTimeMillis()
+    }
+
+    Box(
+        modifier.fillMaxWidth().height(96.dp)
+            .onGloballyPositioned { widthPx = it.size.width.toFloat() }
+            .pointerInput(Unit) {
+                val slop = viewConfiguration.touchSlop
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    // closed: only the buttons start it, so the rest of the viewfinder keeps its own gestures
+                    if (!open && !chips.contains(down.position)) return@awaitEachGesture
+                    var active = open
+                    if (active) { dragging = true; raw = ln(s.zoomTarget ?: s.shownZoom); down.consume() }
+                    var x = down.position.x
+                    var travelled = 0f
+                    while (true) {
+                        val e = withTimeoutOrNull(if (active) Long.MAX_VALUE else 380L) { awaitPointerEvent(PointerEventPass.Initial) }
+                        if (e == null) {
+                            // held still: open without moving
+                            active = true; open = true; dragging = true
+                            raw = ln(s.zoomTarget ?: s.shownZoom)
+                            s.feedback.click()
+                            continue
+                        }
+                        val ch = e.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!ch.pressed) break
+                        val dx = ch.position.x - x
+                        x = ch.position.x
+                        travelled += dx
+                        if (!active && abs(travelled) > slop) {
+                            active = true; open = true; dragging = true
+                            raw = ln(s.zoomTarget ?: s.shownZoom)
+                        }
+                        if (active) {
+                            if (dx != 0f) dragBy(dx * 1.15f)
+                            e.changes.forEach { it.consume() }
+                        }
+                    }
+                    if (active) {
+                        dragging = false
+                        lastTouch = System.currentTimeMillis()
+                        s.zoomTarget?.let { s.setShownZoom(it, live = false) }
+                    }
+                }
+            },
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        val k by animateFloatAsState(if (open) 1f else 0f, spring(dampingRatio = 0.8f, stiffness = 420f), label = "ring")
+        // readout above the dial
+        if (k > 0.01f) {
+            Column(
+                Modifier.align(Alignment.TopCenter).graphicsLayer { alpha = k; translationY = (1 - k) * 18f }
+                    .turned(ui.quarter, ui.angle),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Txt(zoomLabel(shown), 22, FontWeight.SemiBold, Color.White, maxLines = 1)
+                    if (eq > 0f) {
+                        Spacer(Modifier.width(6.dp))
+                        Txt("${(eq * shown).roundToInt()}mm", 13, FontWeight.Medium, if (stuck?.lens == false) Pal.accent else Dim, maxLines = 1)
+                    }
+                    if (digital) {
+                        Spacer(Modifier.width(6.dp))
+                        Txt("數位", 11, FontWeight.Medium, Dim, maxLines = 1)
+                    }
+                }
+            }
+            ZoomDial(
+                shown = shown, lo = lo, hi = hi, eq = eq, marks = marks, ui = ui,
+                modifier = Modifier.padding(horizontal = 14.dp).fillMaxWidth().height(58.dp)
+                    .graphicsLayer { alpha = k; scaleX = 0.6f + 0.4f * k; scaleY = 0.6f + 0.4f * k },
+            )
+        }
+        if (k < 0.99f) {
+            Box(
+                Modifier.graphicsLayer { alpha = 1 - k; scaleX = 1 - 0.3f * k; scaleY = 1 - 0.3f * k }
+                    .onGloballyPositioned { c ->
+                        val p = c.positionInParent()
+                        chips = Rect(p.x - 12f, p.y - 16f, p.x + c.size.width + 12f, p.y + c.size.height + 12f)
+                    },
+            ) { ZoomChips(s, ui, Modifier) }
+        }
+    }
+}
+
+private fun zoomLabel(z: Float): String =
+    if (abs(z - z.roundToInt()) < 0.05f && z >= 0.95f) "${z.roundToInt()}×" else "%.1f×".format(z)
+
+@Composable
+private fun ZoomDial(shown: Float, lo: Float, hi: Float, eq: Float, marks: List<RingMark>, ui: Turn, modifier: Modifier) {
+    val measurer = rememberTextMeasurer()
+    val white = Color.White
+    val accent = Pal.accent
+    Canvas(modifier.clip(RoundedCornerShape(29.dp)).background(Color(0x8C000000))) {
+        val cx = size.width / 2f
+        val perLn = size.width * 0.42f
+        val now = ln(shown)
+        fun xOf(z: Float) = cx + (ln(z) - now) * perLn
+        fun fade(x: Float) = (1f - abs(x - cx) / (size.width * 0.5f)).coerceIn(0f, 1f).let { it * it * (3 - 2 * it) }
+        val base = size.height - 10.dp.toPx()
+        // small ticks, about evenly spaced on the log scale
+        var z = lo
+        while (z <= hi + 1e-3f) {
+            val x = xOf(z)
+            if (x in 0f..size.width) {
+                val a = fade(x)
+                drawLine(white.copy(alpha = 0.45f * a), Offset(x, base - 7.dp.toPx()), Offset(x, base), 1.2.dp.toPx(), StrokeCap.Round)
+            }
+            z += when { z < 2f -> 0.1f; z < 5f -> 0.25f; else -> 0.5f }
+        }
+        // marks: lenses (white, with ×) and Fujinon primes (accent, mm only)
+        for (m in marks) {
+            val x = xOf(m.zoom)
+            if (x < -40f || x > size.width + 40f) continue
+            val a = fade(x)
+            val c = if (m.lens) white else accent
+            drawLine(c.copy(alpha = 0.95f * a), Offset(x, base - 13.dp.toPx()), Offset(x, base), 2.dp.toPx(), StrokeCap.Round)
+            val top = if (m.lens) zoomLabel(m.zoom).removeSuffix("×").let { if (m.zoom < 1f) "%.1f".format(m.zoom) else it } else null
+            val mm = if (eq > 0f) "${(eq * m.zoom).roundToInt()}mm" else null
+            val lines = listOfNotNull(mm, top)
+            var y = 5.dp.toPx()
+            for ((i, t) in lines.withIndex()) {
+                val big = i == lines.lastIndex && m.lens
+                val style = TextStyle(
+                    color = (if (m.lens && !big) white.copy(alpha = 0.6f) else c).copy(alpha = a * (if (m.lens && !big) 0.6f else 1f)),
+                    fontSize = if (big) 13.sp else 10.sp,
+                    fontWeight = if (big) FontWeight.SemiBold else FontWeight.Medium,
+                )
+                val r = measurer.measure(t, style)
+                val tl = Offset(x - r.size.width / 2f, y)
+                rotate(ui.angle(), Offset(x, y + r.size.height / 2f)) { drawText(r, topLeft = tl) }
+                y += r.size.height - 1.dp.toPx()
+            }
+        }
+        // the pointer
+        drawLine(Focus, Offset(cx, 6.dp.toPx() + 22.dp.toPx()), Offset(cx, base + 3.dp.toPx()), 3.dp.toPx(), StrokeCap.Round)
     }
 }
 

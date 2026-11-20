@@ -367,6 +367,7 @@ class ShootController(
         lenses = listOf(Lens(0.6f, null, 0.6f), Lens(1f, null, 1f), Lens(3f, null, 3f))
         lensIndex = 1
         zoomMin = 0.6f; zoomMax = 10f; zoom = 1f
+        if (mainEqMm <= 0f) mainEqMm = 23f
         cameraReady = true
         bound?.second?.let { v -> demoBitmap?.let { v.showDemo(it) } }
     }
@@ -438,6 +439,7 @@ class ShootController(
             it.startsWith("　") || (p.mode != LensScout.Mode.CameraX && (it.startsWith("手機沒有開放") || it.startsWith("可切換鏡頭")))
         }
         cameraReport = (base + p.notes.map { "　$it" }).distinct()
+        if (p.mainEq > 0f) mainEqMm = p.mainEq
         if (p.mode != LensScout.Mode.CameraX) {
             val mainIndex = p.entries.indexOfFirst { abs(it.ratio - 1f) < 0.05f }.coerceAtLeast(0)
             val sameStops = lenses.size == p.entries.size
@@ -518,6 +520,7 @@ class ShootController(
         zoomMin = b.zoomRange.first
         zoomMax = b.zoomRange.second
         zoom = entry.zoom.coerceIn(zoomMin, max(zoomMin, zoomMax))
+        wantZoom?.let { zoom = (entry.zoom * it).coerceIn(zoomMin, max(zoomMin, zoomMax)); wantZoom = null }
         evStep = b.evStep
         evMin = b.evRange.first * evStep
         evMax = b.evRange.second * evStep
@@ -615,6 +618,7 @@ class ShootController(
             }
         }
         val base = mainEq ?: found.firstOrNull()?.eq ?: 0f
+        if (base > 0f) mainEqMm = base
         val groups = mutableListOf<Found>()
         for (f in found.sortedWith(compareBy<Found> { it.physical }.thenBy { it.eq })) {
             // the same focal length found twice (own camera + inside the combined one): keep the first
@@ -631,8 +635,9 @@ class ShootController(
     }
 
     /** Switch to lens [i] of [lenses]. */
-    fun selectLens(i: Int) {
+    fun selectLens(i: Int, keepTarget: Boolean = false) {
         val l = lenses.getOrNull(i) ?: return
+        if (!keepTarget) forgetZoomTarget()
         if (i == lensIndex && !useFront) return
         lensIndex = i
         useFront = false
@@ -725,6 +730,7 @@ class ShootController(
             cameraReport = cameraReport + "主相機可縮小到 ${"%.1f".format(zoomMin)}×（手機自動切換超廣角）"
         }
         cam.cameraInfo.zoomState.observe(owner) { z -> zoomMin = z.minZoomRatio; zoomMax = z.maxZoomRatio; zoom = z.zoomRatio }
+        wantZoom?.let { wantZoom = null; if (!useFront) changeZoom(it) }
         val es = cam.cameraInfo.exposureState
         evStep = es.exposureCompensationStep.toFloat().takeIf { it > 0f } ?: (1f / 3f)
         evMin = es.exposureCompensationRange.lower * evStep
@@ -752,9 +758,87 @@ class ShootController(
         if (!hasFront) return
         useFront = !useFront
         zoom = 1f
+        forgetZoomTarget()
         cameraSwitchCount++
         val b = bound ?: return
         start(b.first, b.second)
+    }
+
+    // ---------------- the zoom ring ----------------
+
+    /** Equivalent focal length (35 mm film) of the main lens, 0 when unknown. */
+    var mainEqMm by mutableFloatStateOf(0f)
+        private set
+    /** What the ring or a pinch asked for, in the zoom the photographer sees (1× = main lens); null = follow the camera. */
+    var zoomTarget by mutableStateOf<Float?>(null)
+        private set
+    /** Bumps on a pinch, so the ring shows itself. */
+    var zoomPing by mutableIntStateOf(0)
+        private set
+    private var wantZoom: Float? = null
+    private var pendingTarget: Float? = null
+
+    fun pingZoomRing() { zoomPing++ }
+
+    /** Lenses that need the camera reopened to switch (not just a zoom step of one combined camera). */
+    private val separateLenses: Boolean get() = !useFront && lenses.size >= 2 && lenses.any { it.zoomRatio == null }
+
+    /** The span of the ring, in shown zoom. */
+    val ringRange: Pair<Float, Float> get() {
+        if (separateLenses) {
+            val lo = lenses.first().ratio
+            val hi = lenses.last().ratio
+            return lo to max(hi * 1.5f, min(10f, hi * 3f))
+        }
+        val lo = zoomMin
+        return lo to max(lo * 2f, min(zoomMax, 10f))
+    }
+
+    fun forgetZoomTarget() {
+        zoomTarget = null
+        wantZoom = null
+        pendingTarget = null
+        mainHandler.removeCallbacks(lensSwitch)
+    }
+
+    private val lensSwitch = Runnable {
+        val t = pendingTarget ?: return@Runnable
+        pendingTarget = null
+        val i = lenses.indices.lastOrNull { lenses[it].ratio <= t * 1.002f } ?: 0
+        if (i == lensIndex) {
+            changeZoom(t / lenses[i].ratio)
+        } else {
+            wantZoom = t / lenses[i].ratio
+            selectLens(i, keepTarget = true)
+        }
+    }
+
+    /**
+     * Zoom to [target] (1× = main lens), picking the lens that covers it and cropping the rest. While a drag is
+     * still going ([live]), another lens is only opened once the finger rests a moment.
+     */
+    fun setShownZoom(target: Float, live: Boolean) {
+        val (lo, hi) = ringRange
+        val t = target.coerceIn(lo, hi)
+        zoomTarget = t
+        if (!separateLenses) {
+            if (!useFront && lenses.size >= 2) {
+                lensIndex = lenses.indices.lastOrNull { lenses[it].ratio <= t * 1.002f } ?: 0
+            }
+            changeZoom(t)
+            return
+        }
+        val i = lenses.indices.lastOrNull { lenses[it].ratio <= t * 1.002f } ?: 0
+        mainHandler.removeCallbacks(lensSwitch)
+        if (i == lensIndex) {
+            pendingTarget = null
+            changeZoom(t / lenses[i].ratio)
+            return
+        }
+        pendingTarget = t
+        // meanwhile the open lens gets as close as it can
+        changeZoom(t / lenses[lensIndex].ratio)
+        if (live) mainHandler.postDelayed(lensSwitch, 260) else lensSwitch.run()
     }
 
     fun changeZoom(r: Float) {
