@@ -99,6 +99,8 @@ class ShootTest {
             while (System.currentTimeMillis() < end && c.shoot.lastUri == null) Thread.sleep(300)
             Thread.sleep(800)
             shot(inst, "shoot_03_after_shot")
+            Thread.sleep(3000)
+            shot(inst, "shoot_03b_later")
             log(inst, "lastUri ${c.shoot.lastUri} capturing ${c.shoot.capturing} processing ${c.shoot.processing} toast ${c.toast?.text}")
             c.shoot.cameraReport.forEach { log(inst, it) }
             dev.findObject(By.text("設定"))?.click()
