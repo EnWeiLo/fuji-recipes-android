@@ -394,6 +394,119 @@ class ShootController(
         cameraReport = report
     }
 
+    // ---------------- hidden lenses ----------------
+
+    /** Lines from the last hidden-lens probe, for 設定 → 相機資訊. */
+    var probeReport by mutableStateOf<List<String>>(emptyList())
+        private set
+    var probing by mutableStateOf(false)
+        private set
+
+    /**
+     * Some phones list only cameras 0 and 1 but still let apps open others by number. Tries 0–15 straight through
+     * Camera2 (outside CameraX), reports what each one is and whether it really opens. Call while the camera is
+     * not in use (from the settings page).
+     */
+    @SuppressLint("MissingPermission")
+    fun probeHiddenCameras() {
+        if (probing) return
+        if (ContextCompat.checkSelfPermission(app, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            toast("請先在拍照分頁允許相機權限")
+            return
+        }
+        probing = true
+        probeReport = listOf("尋找中…")
+        scope.launch {
+            val lines = withContext(Dispatchers.IO) { runCatching { probe() }.getOrElse { listOf("失敗：${it.message}") } }
+            probeReport = lines
+            probing = false
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun probe(): List<String> {
+        val cm = app.getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+        val listed = runCatching { cm.cameraIdList.toSet() }.getOrDefault(emptySet())
+        val out = mutableListOf("系統公開的相機：" + listed.sorted().joinToString("、").ifEmpty { "（無）" })
+        val thread = android.os.HandlerThread("probe").apply { start() }
+        val handler = android.os.Handler(thread.looper)
+        var hiddenOk = 0
+        try {
+            for (n in 0..15) {
+                val id = n.toString()
+                val ch = try {
+                    cm.getCameraCharacteristics(id)
+                } catch (_: Throwable) {
+                    continue
+                }
+                val facing = when (ch.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)) {
+                    android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK -> "後"
+                    android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT -> "前"
+                    else -> "外接"
+                }
+                val f = ch.get(android.hardware.camera2.CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull()
+                val size = ch.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                val eq = if (f != null && size != null) {
+                    val d = kotlin.math.hypot(size.width.toDouble(), size.height.toDouble()).toFloat()
+                    if (d > 0f) (f * 43.27f / d).roundToInt() else null
+                } else null
+                val caps = ch.get(android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.toSet() ?: emptySet()
+                val normal = android.hardware.camera2.CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE in caps
+                val logical = Build.VERSION.SDK_INT >= 28 &&
+                    android.hardware.camera2.CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA in caps
+                val physical = if (Build.VERSION.SDK_INT >= 28) runCatching { ch.physicalCameraIds }.getOrDefault(emptySet()) else emptySet()
+                val hidden = id !in listed
+                val opens = if (hidden) tryOpen(cm, id, handler) else null
+                if (hidden && opens == true && facing == "後") hiddenOk++
+                out += buildString {
+                    append("相機 $id（$facing）約 ${eq ?: "?"} mm")
+                    append(if (hidden) "，未公開" else "，公開")
+                    if (!normal) append("，非一般拍照用")
+                    if (logical) append("，組合相機：${physical.sorted().joinToString("、")}")
+                    when (opens) {
+                        true -> append(" → 打得開 ✓")
+                        false -> append(" → 打不開 ✗")
+                        null -> {}
+                    }
+                }
+            }
+            // physical lenses inside the public cameras, as Camera2 sees them
+            for (id in listed) {
+                val ch = runCatching { cm.getCameraCharacteristics(id) }.getOrNull() ?: continue
+                if (Build.VERSION.SDK_INT < 28) break
+                for (pid in runCatching { ch.physicalCameraIds }.getOrDefault(emptySet())) {
+                    val pc = runCatching { cm.getCameraCharacteristics(pid) }.getOrNull() ?: continue
+                    val f = pc.get(android.hardware.camera2.CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull()
+                    val size = pc.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                    val eq = if (f != null && size != null) (f * 43.27f / kotlin.math.hypot(size.width.toDouble(), size.height.toDouble()).toFloat()).roundToInt() else null
+                    out += "　相機 $id 裡的實體鏡頭 $pid：約 ${eq ?: "?"} mm"
+                }
+            }
+        } finally {
+            thread.quitSafely()
+        }
+        out += if (hiddenOk > 0) "找到 $hiddenOk 顆未公開但打得開的後鏡頭" else "沒有找到可用的隱藏後鏡頭"
+        return out
+    }
+
+    /** Opens camera [id] for a moment. true = opened, false = refused. */
+    @SuppressLint("MissingPermission")
+    private fun tryOpen(cm: android.hardware.camera2.CameraManager, id: String, handler: android.os.Handler): Boolean {
+        val done = java.util.concurrent.CountDownLatch(1)
+        var ok = false
+        try {
+            cm.openCamera(id, object : android.hardware.camera2.CameraDevice.StateCallback() {
+                override fun onOpened(camera: android.hardware.camera2.CameraDevice) { ok = true; camera.close(); done.countDown() }
+                override fun onDisconnected(camera: android.hardware.camera2.CameraDevice) { camera.close(); done.countDown() }
+                override fun onError(camera: android.hardware.camera2.CameraDevice, error: Int) { camera.close(); done.countDown() }
+            }, handler)
+        } catch (_: Throwable) {
+            return false
+        }
+        done.await(4, java.util.concurrent.TimeUnit.SECONDS)
+        return ok
+    }
+
     /** Switch to lens [i] of [lenses]. */
     fun selectLens(i: Int) {
         val l = lenses.getOrNull(i) ?: return

@@ -970,6 +970,11 @@ fun ShootSettings(c: AppController) {
             } else {
                 s.cameraReport.forEach { Txt(it, 12, color = p.sub) }
             }
+            Spacer(Modifier.height(4.dp))
+            SoftButton(if (s.probing) "尋找中…" else "嘗試尋找隱藏鏡頭", { s.probeHiddenCameras() })
+            if (s.probeReport.isNotEmpty()) {
+                s.probeReport.forEach { Txt(it, 12, color = p.text) }
+            }
         }
     }
 }
