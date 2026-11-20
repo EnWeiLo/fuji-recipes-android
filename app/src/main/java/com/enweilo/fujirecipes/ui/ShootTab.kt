@@ -923,7 +923,7 @@ private fun ZoomDial(shown: Float, lo: Float, hi: Float, eq: Float, marks: List<
             }
         }
         // the pointer
-        drawLine(Focus, Offset(cx, 6.dp.toPx() + 22.dp.toPx()), Offset(cx, base + 3.dp.toPx()), 3.dp.toPx(), StrokeCap.Round)
+        drawLine(Focus, Offset(cx, base - 17.dp.toPx()), Offset(cx, base + 4.dp.toPx()), 3.dp.toPx(), StrokeCap.Round)
     }
 }
 
