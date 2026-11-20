@@ -67,6 +67,12 @@ class PromoTest {
         sh("am broadcast -a com.android.systemui.demo -e command network -e wifi show -e level 4 -e mobile show -e datatype none -e level 4")
         sh("am broadcast -a com.android.systemui.demo -e command notifications -e visible false")
 
+        // the app keeps animating, so never wait for "idle" (it would stall every swipe by seconds)
+        androidx.test.uiautomator.Configurator.getInstance().apply {
+            waitForIdleTimeout = 0
+            waitForSelectorTimeout = 0
+            actionAcknowledgmentTimeout = 0
+        }
         step("start")
         val store = LutStore(ctx)
         if (store.installedFlog().size < 10) {
@@ -155,6 +161,15 @@ class PromoTest {
             Thread.sleep(4800)
         }
         sh("am broadcast -a com.android.systemui.demo -e command exit")
+        sh("settings put global animator_duration_scale 0")
+        sh("settings put global transition_animation_scale 0")
+        sh("settings put global window_animation_scale 0")
+        androidx.test.uiautomator.Configurator.getInstance().apply {
+            waitForIdleTimeout = 10_000
+            waitForSelectorTimeout = 10_000
+            actionAcknowledgmentTimeout = 3_000
+        }
+        inst.runOnMainSync { c.shoot.stopDemo() }
         step("done")
     }
 }

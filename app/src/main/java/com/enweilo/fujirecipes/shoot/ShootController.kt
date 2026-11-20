@@ -371,6 +371,13 @@ class ShootController(
         bound?.second?.let { v -> demoBitmap?.let { v.showDemo(it) } }
     }
 
+    fun stopDemo() {
+        demoJpeg = null
+        demoBitmap = null
+        lenses = emptyList()
+        cameraReady = false
+    }
+
     fun bind(owner: LifecycleOwner, view: LookPreview) {
         bound = owner to view
         demoBitmap?.let { view.showDemo(it); cameraReady = true; return }
