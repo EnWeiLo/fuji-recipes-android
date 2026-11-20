@@ -319,12 +319,24 @@ class ShootController(
             hasFront = runCatching { p.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) }.getOrDefault(false)
             val back = runCatching { p.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) }.getOrDefault(false)
             if (!back && hasFront) useFront = true
-            if (lenses.isEmpty()) discoverLenses(p)
-            if (!hiddenChecked) {
-                hiddenChecked = true
-                hiddenId = runCatching { Camera2Backend.findHiddenCombined(app) }.getOrNull()
+            if (lenses.isEmpty() && (plan?.mode ?: LensScout.Mode.CameraX) == LensScout.Mode.CameraX) discoverLenses(p)
+            val known = plan ?: scout.cached()
+            if (known != null) {
+                usePlan(known)
+                if (bound?.second === view) start(owner, view)
+            } else {
+                // first time on this phone: find out which lenses can be used (opens each once)
+                scanning = true
+                scope.launch {
+                    val found = withContext(Dispatchers.IO) {
+                        runCatching { scout.scout() }.getOrElse { LensScout.Plan(LensScout.Mode.CameraX, emptyList(), listOf("偵測失敗：${it.message}")) }
+                    }
+                    scout.save(found)
+                    scanning = false
+                    usePlan(found)
+                    if (bound?.second === view) start(owner, view)
+                }
             }
-            if (bound?.second === view) start(owner, view)
         }, ContextCompat.getMainExecutor(app))
         lifecycleOwner?.lifecycle?.removeObserver(lifecycleWatch)
         lifecycleOwner = owner
@@ -333,10 +345,61 @@ class ShootController(
 
     // ---------------- hidden combined camera (Camera2) ----------------
 
-    private var hiddenChecked = false
-    private var hiddenId: String? = null
-    /** Set when the hidden camera refused to work; then we stay with the normal camera. */
-    private var hiddenFailed = false
+    private val scout = LensScout(app)
+    /** How this phone's back lenses are reached (worked out once per phone). */
+    private var plan: LensScout.Plan? = null
+    /** true while the lenses are being found for the first time. */
+    var scanning by mutableStateOf(false)
+        private set
+    var lensMode by mutableStateOf("")
+        private set
+
+    private fun usePlan(p: LensScout.Plan) {
+        plan = p
+        lensMode = when (p.mode) {
+            LensScout.Mode.Combined -> "模式：未公開的組合相機（${p.entries.firstOrNull()?.cameraId}）"
+            LensScout.Mode.Separate -> "模式：分開的鏡頭（" + p.entries.joinToString("、") { it.cameraId } + "）"
+            LensScout.Mode.CameraX -> "模式：一般（系統公開的相機）"
+        }
+        val base = cameraReport.filterNot {
+            it.startsWith("　") || (p.mode != LensScout.Mode.CameraX && (it.startsWith("手機沒有開放") || it.startsWith("可切換鏡頭")))
+        }
+        cameraReport = (base + p.notes.map { "　$it" }).distinct()
+        if (p.mode != LensScout.Mode.CameraX) {
+            val mainIndex = p.entries.indexOfFirst { abs(it.ratio - 1f) < 0.05f }.coerceAtLeast(0)
+            val sameStops = lenses.size == p.entries.size
+            lenses = p.entries.map { Lens(it.ratio, null, if (p.mode == LensScout.Mode.Combined) it.zoom else null) }
+            if (!sameStops || lensIndex !in p.entries.indices || p.mode == LensScout.Mode.Combined) lensIndex = mainIndex
+        }
+    }
+
+    /** Forget what was found; the next time the 拍照 tab opens, the lenses are looked for again. */
+    fun rescanLenses() {
+        scout.forget()
+        plan = null
+        lenses = emptyList()
+        lensIndex = 0
+        lensMode = ""
+        cameraReport = emptyList()
+        toast("下次打開拍照分頁會重新偵測鏡頭")
+    }
+
+    /** A lens of the plan would not open: drop it (or the whole plan) and remember that. */
+    private fun dropFailed(entry: LensScout.Entry) {
+        val p = plan ?: return
+        val isMain = abs(entry.ratio - 1f) < 0.05f
+        val next = if (p.mode == LensScout.Mode.Separate && !isMain && p.entries.size > 2) {
+            p.copy(entries = p.entries - entry, notes = p.notes + "相機 ${entry.cameraId} 打不開，已移除")
+        } else {
+            LensScout.Plan(LensScout.Mode.CameraX, emptyList(), p.notes + "相機 ${entry.cameraId} 打不開，改用一般模式")
+        }
+        scout.save(next)
+        lenses = emptyList()
+        usePlan(next)
+        lensIndex = if (next.mode == LensScout.Mode.CameraX) 0 else next.entries.indexOfFirst { abs(it.ratio - 1f) < 0.05f }.coerceAtLeast(0)
+        toast(if (next.mode == LensScout.Mode.CameraX) "鏡頭打不開，改用一般模式" else "這顆鏡頭打不開，已移除")
+        provider?.let { discoverLenses(it) }
+    }
     private var c2b: Camera2Backend? = null
     /** true while the back camera runs through the hidden combined camera. */
     var usingHidden by mutableStateOf(false)
@@ -356,18 +419,10 @@ class ShootController(
         }
     }
 
-    private fun mainBackEquivalent(): Float? = runCatching {
-        val cm = app.getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
-        val id = cm.cameraIdList.firstOrNull {
-            cm.getCameraCharacteristics(it).get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) ==
-                android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
-        } ?: return null
-        Camera2Backend.equivalent(cm.getCameraCharacteristics(id))
-    }.getOrNull()
-
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    private fun startHidden(owner: LifecycleOwner, view: LookPreview, id: String, attempt: Int = 0) {
+    private fun startHidden(owner: LifecycleOwner, view: LookPreview, entry: LensScout.Entry, attempt: Int = 0) {
+        val id = entry.cameraId
         val wasCameraX = camera != null
         provider?.unbindAll()
         camera = null; capture = null; preview = null
@@ -376,27 +431,24 @@ class ShootController(
         cameraReady = false
         if (wasCameraX && attempt == 0) {
             // give CameraX a moment to release the picture surface
-            mainHandler.postDelayed({ if (bound?.second === view && !useFront) startHidden(owner, view, id, 1) }, 350)
+            mainHandler.postDelayed({ if (bound?.second === view && !useFront) startHidden(owner, view, entry, 1) }, 350)
             return
         }
         val b = try {
             Camera2Backend(app, id)
         } catch (_: Throwable) {
-            hiddenFailed = true
+            dropFailed(entry)
             start(owner, view)
             return
         }
         c2b = b
         zoomMin = b.zoomRange.first
         zoomMax = b.zoomRange.second
-        zoom = 1f
+        zoom = entry.zoom.coerceIn(zoomMin, max(zoomMin, zoomMax))
         evStep = b.evStep
         evMin = b.evRange.first * evStep
         evMax = b.evRange.second * evStep
-        val ratios = b.lensRatios(mainBackEquivalent())
-        lenses = ratios.map { Lens(it, null, it) }
-        lensIndex = ratios.indexOfFirst { abs(it - 1f) < 0.01f }.coerceAtLeast(0)
-        b.zoom = 1f
+        b.zoom = zoom
         b.evIndex = (ev / evStep).roundToInt()
         b.flash = flashCode()
         b.awbMode = currentRecipe()?.let { awbMode(it) } ?: CameraMetadata.CONTROL_AWB_MODE_AUTO
@@ -408,21 +460,16 @@ class ShootController(
                 if (ok) {
                     usingHidden = true
                     cameraReady = true
-                    if (cameraReport.none { it.startsWith("使用未公開") }) {
-                        cameraReport = cameraReport + ("使用未公開的組合相機 $id：" + lenses.joinToString("／") { it.label })
-                    }
                 } else if (attempt < 2) {
                     // the picture surface may still be held by the camera we just left; try again shortly
                     b.close()
                     c2b = null
-                    mainHandler.postDelayed({ if (bound?.second === view && !useFront) startHidden(owner, view, id, attempt + 1) }, 400)
+                    mainHandler.postDelayed({ if (bound?.second === view && !useFront) startHidden(owner, view, entry, attempt + 1) }, 400)
                 } else {
                     b.close()
                     c2b = null
-                    hiddenFailed = true
                     usingHidden = false
-                    lenses = emptyList()
-                    toast("隱藏鏡頭打不開，改用一般模式")
+                    dropFailed(entry)
                     start(owner, view)
                 }
             }
@@ -502,119 +549,6 @@ class ShootController(
         cameraReport = report
     }
 
-    // ---------------- hidden lenses ----------------
-
-    /** Lines from the last hidden-lens probe, for 設定 → 相機資訊. */
-    var probeReport by mutableStateOf<List<String>>(emptyList())
-        private set
-    var probing by mutableStateOf(false)
-        private set
-
-    /**
-     * Some phones list only cameras 0 and 1 but still let apps open others by number. Tries 0–15 straight through
-     * Camera2 (outside CameraX), reports what each one is and whether it really opens. Call while the camera is
-     * not in use (from the settings page).
-     */
-    @SuppressLint("MissingPermission")
-    fun probeHiddenCameras() {
-        if (probing) return
-        if (ContextCompat.checkSelfPermission(app, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            toast("請先在拍照分頁允許相機權限")
-            return
-        }
-        probing = true
-        probeReport = listOf("尋找中…")
-        scope.launch {
-            val lines = withContext(Dispatchers.IO) { runCatching { probe() }.getOrElse { listOf("失敗：${it.message}") } }
-            probeReport = lines
-            probing = false
-        }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun probe(): List<String> {
-        val cm = app.getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
-        val listed = runCatching { cm.cameraIdList.toSet() }.getOrDefault(emptySet())
-        val out = mutableListOf("系統公開的相機：" + listed.sorted().joinToString("、").ifEmpty { "（無）" })
-        val thread = android.os.HandlerThread("probe").apply { start() }
-        val handler = android.os.Handler(thread.looper)
-        var hiddenOk = 0
-        try {
-            for (n in 0..15) {
-                val id = n.toString()
-                val ch = try {
-                    cm.getCameraCharacteristics(id)
-                } catch (_: Throwable) {
-                    continue
-                }
-                val facing = when (ch.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)) {
-                    android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK -> "後"
-                    android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT -> "前"
-                    else -> "外接"
-                }
-                val f = ch.get(android.hardware.camera2.CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull()
-                val size = ch.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-                val eq = if (f != null && size != null) {
-                    val d = kotlin.math.hypot(size.width.toDouble(), size.height.toDouble()).toFloat()
-                    if (d > 0f) (f * 43.27f / d).roundToInt() else null
-                } else null
-                val caps = ch.get(android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.toSet() ?: emptySet()
-                val normal = android.hardware.camera2.CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE in caps
-                val logical = Build.VERSION.SDK_INT >= 28 &&
-                    android.hardware.camera2.CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA in caps
-                val physical = if (Build.VERSION.SDK_INT >= 28) runCatching { ch.physicalCameraIds }.getOrDefault(emptySet()) else emptySet()
-                val hidden = id !in listed
-                val opens = if (hidden) tryOpen(cm, id, handler) else null
-                if (hidden && opens == true && facing == "後") hiddenOk++
-                out += buildString {
-                    append("相機 $id（$facing）約 ${eq ?: "?"} mm")
-                    append(if (hidden) "，未公開" else "，公開")
-                    if (!normal) append("，非一般拍照用")
-                    if (logical) append("，組合相機：${physical.sorted().joinToString("、")}")
-                    when (opens) {
-                        true -> append(" → 打得開 ✓")
-                        false -> append(" → 打不開 ✗")
-                        null -> {}
-                    }
-                }
-            }
-            // physical lenses inside the public cameras, as Camera2 sees them
-            for (id in listed) {
-                val ch = runCatching { cm.getCameraCharacteristics(id) }.getOrNull() ?: continue
-                if (Build.VERSION.SDK_INT < 28) break
-                for (pid in runCatching { ch.physicalCameraIds }.getOrDefault(emptySet())) {
-                    val pc = runCatching { cm.getCameraCharacteristics(pid) }.getOrNull() ?: continue
-                    val f = pc.get(android.hardware.camera2.CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull()
-                    val size = pc.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-                    val eq = if (f != null && size != null) (f * 43.27f / kotlin.math.hypot(size.width.toDouble(), size.height.toDouble()).toFloat()).roundToInt() else null
-                    out += "　相機 $id 裡的實體鏡頭 $pid：約 ${eq ?: "?"} mm"
-                }
-            }
-        } finally {
-            thread.quitSafely()
-        }
-        out += if (hiddenOk > 0) "找到 $hiddenOk 顆未公開但打得開的後鏡頭" else "沒有找到可用的隱藏後鏡頭"
-        return out
-    }
-
-    /** Opens camera [id] for a moment. true = opened, false = refused. */
-    @SuppressLint("MissingPermission")
-    private fun tryOpen(cm: android.hardware.camera2.CameraManager, id: String, handler: android.os.Handler): Boolean {
-        val done = java.util.concurrent.CountDownLatch(1)
-        var ok = false
-        try {
-            cm.openCamera(id, object : android.hardware.camera2.CameraDevice.StateCallback() {
-                override fun onOpened(camera: android.hardware.camera2.CameraDevice) { ok = true; camera.close(); done.countDown() }
-                override fun onDisconnected(camera: android.hardware.camera2.CameraDevice) { camera.close(); done.countDown() }
-                override fun onError(camera: android.hardware.camera2.CameraDevice, error: Int) { camera.close(); done.countDown() }
-            }, handler)
-        } catch (_: Throwable) {
-            return false
-        }
-        done.await(4, java.util.concurrent.TimeUnit.SECONDS)
-        return ok
-    }
-
     /** Switch to lens [i] of [lenses]. */
     fun selectLens(i: Int) {
         val l = lenses.getOrNull(i) ?: return
@@ -639,9 +573,13 @@ class ShootController(
     @OptIn(ExperimentalCamera2Interop::class)
     private fun start(owner: LifecycleOwner, view: LookPreview) {
         val p = provider ?: return
-        val hid = hiddenId
-        if (!useFront && hid != null && !hiddenFailed) {
-            startHidden(owner, view, hid)
+        val pl = plan
+        if (scanning) return
+        if (!useFront && pl != null && pl.mode != LensScout.Mode.CameraX) {
+            val entry = pl.entries.getOrNull(lensIndex) ?: pl.entries.first()
+            // a combined camera stays open across its zoom stops
+            if (pl.mode == LensScout.Mode.Combined && c2b?.id == entry.cameraId && cameraReady) return
+            startHidden(owner, view, entry)
             return
         }
         if (c2b != null) {
@@ -1035,7 +973,7 @@ class ShootController(
         val ex = ExifInterface(tmp.absolutePath)
         for (tag in COPY_TAGS) srcExif.getAttribute(tag)?.let { ex.setAttribute(tag, it) }
         ex.setAttribute(ExifInterface.TAG_ORIENTATION, orientation.toString())
-        ex.setAttribute(ExifInterface.TAG_SOFTWARE, "富士食譜")
+        ex.setAttribute(ExifInterface.TAG_SOFTWARE, "富士食堂")
         if (lens != null) ex.setAttribute(ExifInterface.TAG_LENS_MODEL, lens)
         if (recipe != null) {
             ex.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "${recipe.name.ifEmpty { "未命名" }} · ${recipe.filmSim}")
@@ -1080,7 +1018,7 @@ class ShootController(
             val values = ContentValues().apply {
                 put(MediaStore.Images.Media.DISPLAY_NAME, name)
                 put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/富士食譜")
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/富士食堂")
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
             val resolver = app.contentResolver

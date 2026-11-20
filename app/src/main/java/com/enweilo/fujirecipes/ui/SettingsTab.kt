@@ -90,6 +90,7 @@ fun SettingsTab(c: AppController) {
         item { SectionLabel("關於") }
         item {
             Panel {
+                ValueRow("名稱", "富士食堂"); Divider()
                 ValueRow("版本", version); Divider()
                 ValueRow("資料位置", "只存在這支手機")
             }

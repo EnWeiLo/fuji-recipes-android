@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single-colour version for Android 13+ themed icons. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#000000" android:fillType="evenOdd" android:pathData="M32.30,35.40 L32.30,31.68 Q32.30,29.20 34.78,29.20 L47.18,29.20 Q49.66,29.20 49.66,31.68 L49.66,35.40 Z M31.06,35.40 L76.94,35.40 Q84.38,35.40 84.38,42.84 L84.38,71.36 Q84.38,78.80 76.94,78.80 L31.06,78.80 Q23.62,78.80 23.62,71.36 L23.62,42.84 Q23.62,35.40 31.06,35.40 Z M39.74,57.72 A14.26,14.26 0 1,0 68.26,57.72 A14.26,14.26 0 1,0 39.74,57.72 Z" />
+    <path android:fillColor="#000000" android:pathData="M70.12,31.06 L75.70,31.06 Q77.56,31.06 77.56,32.92 L77.56,34.78 Q77.56,36.64 75.70,36.64 L70.12,36.64 Q68.26,36.64 68.26,34.78 L68.26,32.92 Q68.26,31.06 70.12,31.06 Z" />
+    <group>
+        <clip-path android:pathData="M42.22,57.72 A11.78,11.78 0 1,0 65.78,57.72 A11.78,11.78 0 1,0 42.22,57.72 Z" />
+        <path android:fillColor="#000000" android:pathData="M37.26,72.60 L49.66,54.00 L58.34,54.00 L70.74,72.60 Z" />
+    </group>
+</vector>

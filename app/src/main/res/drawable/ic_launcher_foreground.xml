@@ -1,23 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 富士食堂: a camera whose lens is a bowl rim (film-hole squares) holding Mt Fuji at sunset. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- camera top bump -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M41,40 L45,33 L63,33 L67,40 Z" />
-    <!-- camera body -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M31,40 L77,40 A7,7 0 0 1 84,47 L84,69 A7,7 0 0 1 77,76 L31,76 A7,7 0 0 1 24,69 L24,47 A7,7 0 0 1 31,40 Z" />
-    <!-- lens ring -->
-    <path
-        android:fillColor="#F0643A"
-        android:pathData="M42,58 A12,12 0 1 0 66,58 A12,12 0 1 0 42,58 Z" />
-    <!-- lens glass -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M48,58 A6,6 0 1 0 60,58 A6,6 0 1 0 48,58 Z" />
+    <path android:fillColor="#F7EFE4" android:pathData="M34.78,29.20 L47.18,29.20 Q49.66,29.20 49.66,31.68 L49.66,36.64 Q49.66,39.12 47.18,39.12 L34.78,39.12 Q32.30,39.12 32.30,36.64 L32.30,31.68 Q32.30,29.20 34.78,29.20 Z" />
+    <path android:fillColor="#F7EFE4" android:pathData="M31.06,35.40 L76.94,35.40 Q84.38,35.40 84.38,42.84 L84.38,71.36 Q84.38,78.80 76.94,78.80 L31.06,78.80 Q23.62,78.80 23.62,71.36 L23.62,42.84 Q23.62,35.40 31.06,35.40 Z" />
+    <path android:fillColor="#2B2B2E" android:pathData="M70.12,31.06 L75.70,31.06 Q77.56,31.06 77.56,32.92 L77.56,34.78 Q77.56,36.64 75.70,36.64 L70.12,36.64 Q68.26,36.64 68.26,34.78 L68.26,32.92 Q68.26,31.06 70.12,31.06 Z" />
+    <path android:fillColor="#F26B3A" android:pathData="M70.12,42.84 A2.48,2.48 0 1,0 75.08,42.84 A2.48,2.48 0 1,0 70.12,42.84 Z" />
+    <path android:fillColor="#2B2B2E" android:pathData="M36.64,57.72 A17.36,17.36 0 1,0 71.36,57.72 A17.36,17.36 0 1,0 36.64,57.72 Z" />
+    <path android:fillColor="#F26B3A" android:pathData="M52.82,41.66 L55.18,41.66 L55.18,44.02 L52.82,44.02 Z" />
+    <path android:fillColor="#F26B3A" android:pathData="M61.01,43.22 L63.05,44.40 L61.87,46.44 L59.83,45.26 Z" />
+    <path android:fillColor="#F26B3A" android:pathData="M67.32,48.67 L68.50,50.71 L66.46,51.89 L65.28,49.85 Z" />
+    <path android:fillColor="#F26B3A" android:pathData="M70.06,56.54 L70.06,58.90 L67.70,58.90 L67.70,56.54 Z" />
+    <path android:fillColor="#F26B3A" android:pathData="M68.50,64.73 L67.32,66.77 L65.28,65.59 L66.46,63.55 Z" />
+    <path android:fillColor="#F26B3A" android:pathData="M63.05,71.04 L61.01,72.22 L59.83,70.18 L61.87,69.00 Z" />
+    <path android:fillColor="#F26B3A" android:pathData="M55.18,73.78 L52.82,73.78 L52.82,71.42 L55.18,71.42 Z" />
+    <path android:fillColor="#F26B3A" android:pathData="M46.99,72.22 L44.95,71.04 L46.13,69.00 L48.17,70.18 Z" />
+    <path android:fillColor="#F26B3A" android:pathData="M40.68,66.77 L39.50,64.73 L41.54,63.55 L42.72,65.59 Z" />
+    <path android:fillColor="#F26B3A" android:pathData="M37.94,58.90 L37.94,56.54 L40.30,56.54 L40.30,58.90 Z" />
+    <path android:fillColor="#F26B3A" android:pathData="M39.50,50.71 L40.68,48.67 L42.72,49.85 L41.54,51.89 Z" />
+    <path android:fillColor="#F26B3A" android:pathData="M44.95,44.40 L46.99,43.22 L48.17,45.26 L46.13,46.44 Z" />
+    <group>
+        <clip-path android:pathData="M41.60,57.72 A12.40,12.40 0 1,0 66.40,57.72 A12.40,12.40 0 1,0 41.60,57.72 Z" />
+        <path android:fillColor="#FF9A5C" android:pathData="M40.98,44.70 L67.02,44.70 L67.02,44.70 67.02,44.70 L67.02,70.74 L67.02,70.74 67.02,70.74 L40.98,70.74 L40.98,70.74 40.98,70.74 L40.98,44.70 L40.98,44.70 40.98,44.70 Z" />
+        <path android:fillColor="#FFE1A8" android:pathData="M57.72,52.76 A3.10,3.10 0 1,0 63.92,52.76 A3.10,3.10 0 1,0 57.72,52.76 Z" />
+        <path android:fillColor="#4A3557" android:pathData="M37.26,72.60 L49.66,54.00 L58.34,54.00 L70.74,72.60 Z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M47.18,57.72 L49.66,54.00 L58.34,54.00 L60.82,57.72 L58.34,56.48 L56.48,58.96 L54.00,56.48 L51.52,58.96 L49.66,56.48 Z" />
+    </group>
 </vector>

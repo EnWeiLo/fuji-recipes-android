@@ -43,32 +43,6 @@ class Camera2Backend(private val context: Context, val id: String) {
             return if (d > 0f) f * 43.27f / d else null
         }
 
-        /**
-         * Looks for a back camera that is not in the public list but combines several lenses with a zoom range
-         * reaching below 1× (an ultra-wide). Returns its id, or null.
-         */
-        fun findHiddenCombined(context: Context): String? {
-            if (Build.VERSION.SDK_INT < 30) return null
-            val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            val listed = runCatching { cm.cameraIdList.toSet() }.getOrDefault(emptySet())
-            var best: String? = null
-            var bestMin = 1f
-            for (n in 0..15) {
-                val id = n.toString()
-                if (id in listed) continue
-                val ch = runCatching { cm.getCameraCharacteristics(id) }.getOrNull() ?: continue
-                if (ch.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_BACK) continue
-                val caps = ch.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.toSet() ?: continue
-                if (CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE !in caps) continue
-                val range = ch.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) ?: continue
-                val logical = CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA in caps
-                if (range.lower < bestMin - 0.01f && (logical || range.lower < 0.95f)) {
-                    best = id
-                    bestMin = range.lower
-                }
-            }
-            return best
-        }
     }
 
     private val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -87,19 +61,6 @@ class Camera2Backend(private val context: Context, val id: String) {
     private val hasFlash = ch.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
     private val awbModes = ch.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.toSet() ?: emptySet()
     private val afModes = ch.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?.toSet() ?: emptySet()
-
-    /** Lenses inside this camera as zoom ratios relative to its 1× (e.g. 0.57, 1, 2.96). */
-    fun lensRatios(mainEquivalent: Float?): List<Float> {
-        val out = mutableListOf(zoomRange.first, 1f)
-        if (Build.VERSION.SDK_INT >= 28 && mainEquivalent != null) {
-            for (pid in runCatching { ch.physicalCameraIds }.getOrDefault(emptySet())) {
-                val eq = runCatching { equivalent(cm.getCameraCharacteristics(pid)) }.getOrNull() ?: continue
-                val r = eq / mainEquivalent
-                if (r > 1.3f && r <= zoomRange.second) out += r
-            }
-        }
-        return out.distinctBy { (it * 20).roundToInt() }.sorted()
-    }
 
     // ---------------- settings the controller changes ----------------
 

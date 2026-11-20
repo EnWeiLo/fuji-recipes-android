@@ -996,15 +996,15 @@ fun ShootSettings(c: AppController) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Txt("相機資訊", 15, FontWeight.SemiBold)
             if (s.cameraReport.isEmpty()) {
-                Txt("打開一次拍照分頁後，這裡會列出手機開放給 App 的鏡頭。", 12, color = p.sub)
+                Txt("打開一次拍照分頁後，這裡會列出偵測到的鏡頭。", 12, color = p.sub)
             } else {
                 s.cameraReport.forEach { Txt(it, 12, color = p.sub) }
             }
+            if (s.lensMode.isNotEmpty()) Txt(s.lensMode, 13, FontWeight.Medium)
+            if (s.scanning) Txt("正在偵測鏡頭…", 12, color = p.sub)
             Spacer(Modifier.height(4.dp))
-            SoftButton(if (s.probing) "尋找中…" else "嘗試尋找隱藏鏡頭", { s.probeHiddenCameras() })
-            if (s.probeReport.isNotEmpty()) {
-                s.probeReport.forEach { Txt(it, 12, color = p.text) }
-            }
+            SoftButton("重新偵測鏡頭", { s.rescanLenses() })
+            Txt("換了系統版本，或鏡頭切換怪怪的時候可以按。下次打開拍照分頁會重新找一次。", 12, color = p.sub)
         }
     }
 }
