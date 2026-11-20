@@ -403,7 +403,11 @@ class ShootController(
     private fun usePlan(p: LensScout.Plan) {
         plan = p
         lensMode = when (p.mode) {
-            LensScout.Mode.Combined -> "模式：未公開的組合相機（${p.entries.firstOrNull()?.cameraId}）"
+            LensScout.Mode.Combined -> when {
+                p.entries.size <= 1 -> "模式：只有主鏡頭（相機 ${p.entries.firstOrNull()?.cameraId}）"
+                p.notes.any { it.startsWith("使用公開的組合相機") } -> "模式：公開的組合相機（${p.entries.firstOrNull()?.cameraId}）"
+                else -> "模式：未公開的組合相機（${p.entries.firstOrNull()?.cameraId}）"
+            }
             LensScout.Mode.Separate -> "模式：分開的鏡頭（" + p.entries.joinToString("、") { it.cameraId } + "）"
             LensScout.Mode.CameraX -> "模式：一般（系統公開的相機）"
         }
