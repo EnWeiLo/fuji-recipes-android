@@ -173,26 +173,33 @@ object PreviewFit {
         if (ratios.size < 12) return null
         ratios.sort()
         val scale = ratios[ratios.size / 2]
-        val first = (1 until 256).firstOrNull { valid[it] } ?: return null
-        val last = (1 until 256).lastOrNull { valid[it] } ?: return null
-        val c = FloatArray(256)
+        // Keep the shape of the fixed curve and only bend it smoothly toward what RAW says: a measured curve
+        // follows every flat patch of the scene and would band the picture.
+        val lr = FloatArray(256) { Float.NaN }
+        for (i in 1 until 256) if (valid[i] && static[i] > 1e-6f) lr[i] = ln(matched[i] * scale / static[i]).coerceIn(-1.4f, 1.4f)
+        val first = (1 until 256).firstOrNull { !lr[it].isNaN() } ?: return null
+        val last = (1 until 256).lastOrNull { !lr[it].isNaN() } ?: return null
         for (i in 1 until 256) {
-            c[i] = when {
-                i < first -> static[i] * (matched[first] * scale / max(static[first], 1e-6f))
-                i > last -> static[i] * (matched[last] * scale / max(static[last], 1e-6f))
-                valid[i] -> matched[i] * scale
-                else -> static[i]
+            if (i < first) lr[i] = lr[first]
+            else if (i > last) lr[i] = lr[last]
+            else if (lr[i].isNaN()) lr[i] = lr[i - 1]
+        }
+        lr[0] = lr[1]
+        // wide smoothing (about ±12 steps)
+        repeat(4) {
+            val t = lr.copyOf()
+            for (i in 0 until 256) {
+                var sum = 0f; var n = 0
+                for (j in max(0, i - 6)..min(255, i + 6)) { sum += t[j]; n++ }
+                lr[i] = sum / n
             }
         }
-        // smooth a little (log domain), then never let it go down
-        val lg = FloatArray(256) { ln(max(c[it], 1e-6f)) }
-        repeat(2) {
-            val t = lg.copyOf()
-            for (i in 2 until 254) lg[i] = (t[i - 2] + t[i - 1] + t[i] + t[i + 1] + t[i + 2]) / 5f
-        }
         val out = FloatArray(256)
-        var mx = 0f
-        for (i in 1 until 256) { mx = max(mx, exp(lg[i])); out[i] = min(mx, 40f) }
+        for (i in 1 until 256) {
+            val v = min(static[i] * exp(lr[i]), 40f)
+            // always rising, at least a third as steeply as the fixed curve
+            out[i] = max(v, out[i - 1] + 0.33f * max(0f, static[i] - static[i - 1]))
+        }
         out[0] = 0f
 
         // colour: the middle tones of both, in scene light
