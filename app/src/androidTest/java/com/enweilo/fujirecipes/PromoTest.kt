@@ -3,6 +3,7 @@ package com.enweilo.fujirecipes
 import android.content.ContentValues
 import android.os.Environment
 import android.provider.MediaStore
+import com.enweilo.fujirecipes.data.Recipe
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -112,74 +113,82 @@ class PromoTest {
         val uri = ctx.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)!!
         ctx.contentResolver.openOutputStream(uri)!!.use { it.write(landscape) }
 
+        // recipes to show off (the list, the strip in the shoot tab)
+        val seeds = listOf(
+            Recipe(id = "p1", name = "暖陽街拍", filmSim = "Classic Chrome", dr = "DR200", grain = "弱／小", colorChrome = "強", colorChromeBlue = "弱", wb = "日光", shiftR = "2", shiftB = "-4", highlight = "-1", shadow = "1", color = "2", ev = "+1/3"),
+            Recipe(id = "p2", name = "老派負片", filmSim = "Classic Neg.", dr = "DR400", grain = "強／小", colorChrome = "強", wb = "自動", shiftR = "1", shiftB = "-3", highlight = "1", shadow = "2", color = "3", ev = "0"),
+            Recipe(id = "p3", name = "清透日常", filmSim = "REALA ACE", dr = "DR200", grain = "關", colorChrome = "弱", colorChromeBlue = "弱", wb = "自動", highlight = "-1", shadow = "-1", color = "1", ev = "+2/3"),
+            Recipe(id = "p4", name = "濃郁風景", filmSim = "Velvia", dr = "DR100", grain = "關", colorChrome = "強", colorChromeBlue = "強", wb = "日光", highlight = "0", shadow = "1", color = "1", ev = "-1/3"),
+            Recipe(id = "p5", name = "電影感", filmSim = "ETERNA", dr = "DR400", grain = "弱／大", wb = "自動", shiftR = "-1", shiftB = "-2", highlight = "-2", shadow = "-1", color = "-2", ev = "0"),
+            Recipe(id = "p6", name = "黑白紀實", filmSim = "ACROS", dr = "DR200", grain = "強／大", highlight = "1", shadow = "2", sharpness = "1", ev = "0"),
+        )
+        inst.runOnMainSync { seeds.reversed().forEach { c.saveRecipeForTest(it) } }
+        sh("pm grant ${ctx.packageName} android.permission.CAMERA")
+
         ctx.startActivity(
             android.content.Intent(ctx, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK),
         )
-        run {
-            Thread.sleep(3500)
-            inst.runOnMainSync { c.dismissUpdatePrompt() }
-            val w = dev.displayWidth
-            val h = dev.displayHeight
+        fun shot(name: String) { sh("screencap -p /data/local/tmp/s_$name.png"); step("shot $name") }
+        fun main(block: () -> Unit) = inst.runOnMainSync(block)
+        Thread.sleep(3500)
+        main { c.dismissUpdatePrompt() }
 
-            step("1. recipes")
-            // 1. recipes: scroll the list, open one
-            record("recipes", 9)
-            dev.swipe(w / 2, (h * 0.78).toInt(), w / 2, (h * 0.42).toInt(), 60)
-            Thread.sleep(1300)
-            dev.swipe(w / 2, (h * 0.42).toInt(), w / 2, (h * 0.70).toInt(), 60)
-            Thread.sleep(1200)
-            // open the first recipe card
-            dev.click(w / 2, (h * 0.30).toInt())
-            Thread.sleep(5200)
-            dev.pressBack()
-            Thread.sleep(1200)
+        step("1. recipes")
+        Thread.sleep(800)
+        shot("recipes")
+        main { c.openDetail("p1") }
+        Thread.sleep(1800)
+        shot("detail")
+        val w = dev.displayWidth
+        val h = dev.displayHeight
+        dev.swipe(w / 2, (h * 0.75).toInt(), w / 2, (h * 0.35).toInt(), 40)
+        Thread.sleep(1800)
+        shot("detail2")
+        main { c.back() }
+        Thread.sleep(1500)
 
-            step("2. connect")
-            // 2. connect
-            tab(1)
-            Thread.sleep(1500)
-            record("connect", 5)
-            Thread.sleep(5200)
+        step("2. connect")
+        main { c.tab = Tab.Camera }
+        Thread.sleep(2500)
+        shot("connect")
 
-            step("3. shoot")
-            // 3. shoot: the coffee photo through different recipes, then the shutter
-            inst.runOnMainSync {
-                c.shoot.startDemo(portrait)
-                c.shoot.selectRecipe(c.recipes.firstOrNull()?.id)
-            }
-            tab(2)
-            Thread.sleep(2500)
-            val dd = ctx.resources.displayMetrics.density
-            val strip = h - ((48 + 94 + 96 + 29) * dd).toInt()
-            record("shoot", 14)
-            Thread.sleep(800)
-            repeat(4) {
-                dev.swipe((w * 0.68).toInt(), strip, (w * 0.40).toInt(), strip, 28)
-                Thread.sleep(1900)
-            }
-            inst.runOnMainSync { c.shoot.shutter() }
-            Thread.sleep(4500)
-
-            step("4. polaroid")
-            // 4. polaroid
-            inst.runOnMainSync { c.polaroid.addPhotos(listOf(uri), true) }
-            tab(3)
-            Thread.sleep(2500)
-            record("polaroid", 8)
-            Thread.sleep(1500)
-            for (f in listOf(Frame.Black, Frame.Tint, Frame.White)) {
-                inst.runOnMainSync { c.polaroid.setFrame(f) }
-                Thread.sleep(1700)
-            }
-            Thread.sleep(2000)
-
-            step("5. home")
-            // 5. home of the app, for the ending
-            tab(0)
-            Thread.sleep(1500)
-            record("home", 4)
-            Thread.sleep(4800)
+        step("3. shoot")
+        main { c.shoot.startDemo(portrait); c.shoot.selectRecipe(null); c.shoot.changeReviewMode(3) }
+        main { c.tab = Tab.Shoot }
+        Thread.sleep(3500)
+        shot("shoot_0")
+        seeds.forEachIndexed { i, r ->
+            main { c.shoot.selectRecipe(r.id) }
+            Thread.sleep(2200)
+            shot("shoot_${i + 1}")
         }
+        main { c.shoot.selectRecipe("p1") }
+        Thread.sleep(2200)
+        shot("shoot_pre")
+        main { c.shoot.shutter() }
+        Thread.sleep(6000)
+        shot("review")
+        main { c.shoot.dismissReview() }
+        Thread.sleep(1500)
+        shot("shoot_after")
+
+        step("4. polaroid")
+        main { c.polaroid.addPhotos(listOf(uri), true) }
+        main { c.tab = Tab.Polaroid }
+        Thread.sleep(3500)
+        Frame.values().forEachIndexed { i, f ->
+            main { c.polaroid.setFrame(f) }
+            Thread.sleep(1800)
+            shot("pol_$i")
+        }
+
+        step("5. settings")
+        main { c.tab = Tab.Settings }
+        Thread.sleep(2000)
+        shot("settings")
+        main { c.tab = Tab.Recipes }
+        Thread.sleep(1500)
+        shot("home")
         sh("am broadcast -a com.android.systemui.demo -e command exit")
         sh("settings put global animator_duration_scale 0")
         sh("settings put global transition_animation_scale 0")
