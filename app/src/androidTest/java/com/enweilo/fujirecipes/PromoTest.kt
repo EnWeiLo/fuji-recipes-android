@@ -22,7 +22,7 @@ import org.junit.runner.RunWith
 class PromoTest {
 
     @get:org.junit.Rule
-    val timeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(300)
+    val timeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(900)
 
     private val inst = InstrumentationRegistry.getInstrumentation()
 
@@ -35,11 +35,21 @@ class PromoTest {
         }
     }
 
+    /** Taps the tab bar (5 tabs) without searching the screen (searching waits for the app to be idle). */
+    private fun tab(i: Int) {
+        val d = ctx().resources.displayMetrics.density
+        val w = dev.displayWidth
+        val nav = (48 * d).toInt()
+        val y = dev.displayHeight - nav - (14 * d + 33 * d).toInt()
+        val x0 = 24 * d
+        val bw = w - 2 * x0
+        dev.click((x0 + bw * (i + 0.5f) / 5).toInt(), y)
+    }
+
+    private fun ctx() = inst.targetContext
+
     /** Starts screenrecord for [seconds] in the background. */
     private fun record(name: String, seconds: Int) {
-        // an update offer from the launch check would sit on top of everything
-        dev.findObject(By.text("取消"))?.click()
-        Thread.sleep(300)
         val pfd = inst.uiAutomation.executeShellCommand(
             "screenrecord --size 720x1600 --bit-rate 16000000 --time-limit $seconds /sdcard/Pictures/rendercheck/rec_$name.mp4",
         )
@@ -83,6 +93,8 @@ class PromoTest {
         step("luts ready")
         inst.runOnMainSync {
             c.changeAutoUpdate(false)
+            c.dismissUpdatePrompt()
+            c.changeBgMotion(false)
             c.shoot.refreshLuts()
             c.shoot.changeReviewMode(1)
         }
@@ -98,8 +110,12 @@ class PromoTest {
         val uri = ctx.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)!!
         ctx.contentResolver.openOutputStream(uri)!!.use { it.write(landscape) }
 
-        ActivityScenario.launch(MainActivity::class.java).use {
-            Thread.sleep(2500)
+        ctx.startActivity(
+            android.content.Intent(ctx, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK),
+        )
+        run {
+            Thread.sleep(3500)
+            inst.runOnMainSync { c.dismissUpdatePrompt() }
             val w = dev.displayWidth
             val h = dev.displayHeight
 
@@ -110,15 +126,15 @@ class PromoTest {
             Thread.sleep(1300)
             dev.swipe(w / 2, (h * 0.42).toInt(), w / 2, (h * 0.70).toInt(), 60)
             Thread.sleep(1200)
-            val first = c.recipes.firstOrNull()?.name
-            if (first != null) dev.findObject(By.text(first))?.click()
+            // open the first recipe card
+            dev.click(w / 2, (h * 0.30).toInt())
             Thread.sleep(5200)
             dev.pressBack()
             Thread.sleep(1200)
 
             step("2. connect")
             // 2. connect
-            dev.findObject(By.text("連線"))?.click()
+            tab(1)
             Thread.sleep(1500)
             record("connect", 5)
             Thread.sleep(5200)
@@ -129,9 +145,10 @@ class PromoTest {
                 c.shoot.startDemo(portrait)
                 c.shoot.selectRecipe(c.recipes.firstOrNull()?.id)
             }
-            dev.findObject(By.text("拍照"))?.click()
+            tab(2)
             Thread.sleep(2500)
-            val strip = dev.findObject(By.text("不套用"))?.visibleBounds?.centerY() ?: (h * 0.72).toInt()
+            val dd = ctx.resources.displayMetrics.density
+            val strip = h - ((48 + 94 + 96 + 29) * dd).toInt()
             record("shoot", 14)
             Thread.sleep(800)
             repeat(4) {
@@ -144,7 +161,7 @@ class PromoTest {
             step("4. polaroid")
             // 4. polaroid
             inst.runOnMainSync { c.polaroid.addPhotos(listOf(uri), true) }
-            dev.findObject(By.text("拍立得"))?.click()
+            tab(3)
             Thread.sleep(2500)
             record("polaroid", 8)
             Thread.sleep(1500)
@@ -156,7 +173,7 @@ class PromoTest {
 
             step("5. home")
             // 5. home of the app, for the ending
-            dev.findObject(By.text("食譜"))?.click()
+            tab(0)
             Thread.sleep(1500)
             record("home", 4)
             Thread.sleep(4800)
@@ -170,7 +187,7 @@ class PromoTest {
             waitForSelectorTimeout = 10_000
             actionAcknowledgmentTimeout = 3_000
         }
-        inst.runOnMainSync { c.shoot.stopDemo() }
+        inst.runOnMainSync { c.shoot.stopDemo(); c.changeBgMotion(true) }
         step("done")
     }
 }
