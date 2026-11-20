@@ -44,7 +44,8 @@ class PromoTest {
             "screenrecord --size 720x1600 --bit-rate 16000000 --time-limit $seconds /sdcard/Pictures/rendercheck/rec_$name.mp4",
         )
         Thread {
-            runCatching { android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd).readBytes() }
+            val text = runCatching { String(android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd).readBytes()) }.getOrElse { it.toString() }
+            step("screenrecord $name said: ${text.take(300)}")
         }.apply { isDaemon = true }.start()
         step("recording $name")
         Thread.sleep(700)
