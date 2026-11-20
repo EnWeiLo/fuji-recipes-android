@@ -348,10 +348,17 @@ private fun Viewfinder(c: AppController, active: Boolean, ui: Turn) {
     val aspect by animateFloatAsState(s.ratio.short / s.ratio.long, spring(dampingRatio = 0.85f, stiffness = 380f), label = "ratio")
     SideEffect { preview?.aspect = aspect }
 
+    // The whole camera picture always stays on screen at the same size; the photo shape is shown by
+    // dark masks sliding over it (cropping), never by squeezing the picture.
+    var frameAspect by remember { mutableFloatStateOf(3f / 4f) }
+    LaunchedEffect(preview) { preview?.onFrameAspect = { frameAspect = it } }
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        val w = if (maxWidth / maxHeight < aspect) maxWidth else maxHeight * aspect
-        val h = w / aspect
-        Box(Modifier.size(w, h).clip(RoundedCornerShape(6.dp))) {
+        val fw = if (maxWidth / maxHeight < frameAspect) maxWidth else maxHeight * frameAspect
+        val fh = fw / frameAspect
+        // the photo inside it
+        val w = if (aspect < frameAspect) fh * aspect else fw
+        val h = if (aspect < frameAspect) fh else fw / aspect
+        Box(Modifier.size(fw, fh)) {
             AndroidView(
                 factory = { ctx ->
                     LookPreview(ctx, s.luts).also {
@@ -382,6 +389,28 @@ private fun Viewfinder(c: AppController, active: Boolean, ui: Turn) {
                 Box(Modifier.fillMaxSize().background(Ink))
             }
 
+            // masks outside the photo
+            val cropW = w
+            val cropH = h
+            Canvas(Modifier.fillMaxSize()) {
+                val cw = cropW.toPx()
+                val chh = cropH.toPx()
+                val x0 = (size.width - cw) / 2f
+                val y0 = (size.height - chh) / 2f
+                val m = Ink.copy(alpha = 0.88f)
+                if (x0 > 0.5f) {
+                    drawRect(m, Offset.Zero, androidx.compose.ui.geometry.Size(x0, size.height))
+                    drawRect(m, Offset(size.width - x0, 0f), androidx.compose.ui.geometry.Size(x0, size.height))
+                }
+                if (y0 > 0.5f) {
+                    drawRect(m, Offset.Zero, androidx.compose.ui.geometry.Size(size.width, y0))
+                    drawRect(m, Offset(0f, size.height - y0), androidx.compose.ui.geometry.Size(size.width, y0))
+                }
+                // a fine frame line on the photo edge
+                drawRect(Color(0x55FFFFFF), Offset(x0, y0), androidx.compose.ui.geometry.Size(cw, chh), style = Stroke(1.dp.toPx()))
+            }
+
+          Box(Modifier.align(Alignment.Center).size(w, h)) {
             val density = LocalDensity.current
             val wPx = with(density) { w.toPx() }
             val hPx = with(density) { h.toPx() }
@@ -559,6 +588,7 @@ private fun Viewfinder(c: AppController, active: Boolean, ui: Turn) {
             if (blink.value > 0f) Box(Modifier.fillMaxSize().graphicsLayer { alpha = blink.value }.background(Color.Black))
 
             LutBanner(c, look, Modifier.align(Alignment.BottomCenter).padding(bottom = 64.dp, start = 12.dp, end = 12.dp))
+          }
         }
     }
 }

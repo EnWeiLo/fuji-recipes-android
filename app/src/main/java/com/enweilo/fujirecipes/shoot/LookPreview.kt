@@ -55,6 +55,9 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
     @Volatile private var mirror = false
     @Volatile private var lutDirty = false
 
+    /** Called on the main thread with the camera picture's shape (width / height, upright). */
+    var onFrameAspect: ((Float) -> Unit)? = null
+
     /** Called on the main thread when the first camera picture is drawn. */
     var onFirstFrame: (() -> Unit)? = null
 
@@ -145,6 +148,8 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
             frameReady = false
             st.setDefaultBufferSize(width, height)
             frame = minOf(width, height).toFloat() / maxOf(width, height)
+            val fa = frame
+            post { onFrameAspect?.invoke(fa) }
             updateCrop()
             val surface = Surface(st)
             post { onSurface(surface) }
@@ -165,6 +170,8 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
         val res = request.resolution
         st.setDefaultBufferSize(res.width, res.height)
         frame = minOf(res.width, res.height).toFloat() / maxOf(res.width, res.height)
+        val fa = frame
+        post { onFrameAspect?.invoke(fa) }
         updateCrop()
         val surface = Surface(st)
         request.provideSurface(surface, ContextCompat.getMainExecutor(context)) { surface.release() }
@@ -268,7 +275,7 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
             val l = look
             val hasLut = p.useLut(l.lutKey, store)
             p.draw(
-                oesTex, texMat, LookProgram.rotation(effectiveRotation(), mirror), crop, LookProgram.FULL,
+                oesTex, texMat, LookProgram.rotation(effectiveRotation(), mirror), LookProgram.FULL, LookProgram.FULL,
                 viewH.toFloat() / viewW, l, hasLut, original,
             )
         }
