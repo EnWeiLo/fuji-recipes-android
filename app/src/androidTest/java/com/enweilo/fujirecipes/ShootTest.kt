@@ -99,7 +99,8 @@ class ShootTest {
             while (System.currentTimeMillis() < end && c.shoot.lastUri == null) Thread.sleep(300)
             Thread.sleep(800)
             shot(inst, "shoot_03_after_shot")
-            log(inst, "lastUri ${c.shoot.lastUri}")
+            log(inst, "lastUri ${c.shoot.lastUri} capturing ${c.shoot.capturing} processing ${c.shoot.processing} toast ${c.toast?.text}")
+            c.shoot.cameraReport.forEach { log(inst, it) }
             dev.findObject(By.text("設定"))?.click()
             Thread.sleep(1200)
             dev.swipe(dev.displayWidth / 2, dev.displayHeight * 3 / 4, dev.displayWidth / 2, dev.displayHeight / 4, 20)
@@ -133,17 +134,17 @@ class ShootTest {
         save(inst.targetContext, name, bmp)
     }
 
+    private val lines = mutableListOf<String>()
+
+    /** Collected into shoot_log.jpg (text drawn on an image, which the render check copies out). */
     private fun log(inst: android.app.Instrumentation, text: String) {
         android.util.Log.i("ShootTest", text)
-        val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, "shoot-log-${System.currentTimeMillis()}.txt")
-            put(MediaStore.Downloads.MIME_TYPE, "text/plain")
-            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/rendercheck")
-        }
-        runCatching {
-            val r = inst.targetContext.contentResolver
-            val uri = r.insert(MediaStore.Files.getContentUri("external"), values) ?: return
-            r.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
-        }
+        lines += text
+        val bmp = Bitmap.createBitmap(1400, 60 + lines.size * 40, Bitmap.Config.ARGB_8888)
+        val cv = Canvas(bmp)
+        cv.drawColor(Color.WHITE)
+        val paint = Paint().apply { color = Color.BLACK; textSize = 28f; isAntiAlias = true }
+        lines.forEachIndexed { i, l -> cv.drawText(l, 20f, 50f + i * 40, paint) }
+        save(inst.targetContext, "shoot_log", bmp)
     }
 }
