@@ -54,6 +54,21 @@ class LutStore(private val context: Context) {
     fun installed(): Set<String> =
         NAMES.keys.filter { File(dir, "$it.lut").length() == (GRID * GRID * GRID * 8).toLong() }.toSet()
 
+    /** Film simulations whose original F-Log2 LUT is kept too (needed to develop RAW photos). */
+    fun installedFlog(): Set<String> =
+        NAMES.keys.filter { File(dir, "$it.flog").length() == (GRID * GRID * GRID * 8).toLong() }.toSet()
+
+    /** Fujifilm's own F-Log2 → film simulation LUT (33 points, half-float RGBA), or null. */
+    fun loadFlog(key: String): ByteBuffer? {
+        val f = File(dir, "$key.flog")
+        if (f.length() != (GRID * GRID * GRID * 8).toLong()) return null
+        val bytes = f.readBytes()
+        return ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder()).apply { put(bytes); position(0) }
+    }
+
+    /** The curve that undoes a phone's own picture look (display value → scene light), 256 steps. */
+    fun phoneCurve(): FloatArray? = loadCurve()
+
     /** Half-float RGBA data ready for glTexImage3D, or null. */
     fun load(key: String): ByteBuffer? {
         val f = File(dir, "$key.lut")
@@ -301,7 +316,31 @@ class LutStore(private val context: Context) {
         return FloatArray(256) { b.float }
     }
 
+    /** Keeps Fujifilm's LUT as it is (resampled to 33 points if needed), for RAW photos. */
+    private fun saveFlog(key: String, cube: Cube) {
+        val n = GRID
+        val out = ByteBuffer.allocate(n * n * n * 8).order(ByteOrder.nativeOrder())
+        val tmp = FloatArray(3)
+        val one = Half.toHalf(1f)
+        for (b in 0 until n) for (g in 0 until n) for (r in 0 until n) {
+            if (cube.size == n) {
+                val i = ((b * n + g) * n + r) * 3
+                tmp[0] = cube.data[i]; tmp[1] = cube.data[i + 1]; tmp[2] = cube.data[i + 2]
+            } else {
+                sample(cube, r / (n - 1f), g / (n - 1f), b / (n - 1f), tmp)
+            }
+            out.putShort(Half.toHalf(tmp[0].coerceIn(0f, 1f)))
+            out.putShort(Half.toHalf(tmp[1].coerceIn(0f, 1f)))
+            out.putShort(Half.toHalf(tmp[2].coerceIn(0f, 1f)))
+            out.putShort(one)
+        }
+        val t = File(dir, "$key.flog.tmp")
+        t.writeBytes(out.array())
+        t.renameTo(File(dir, "$key.flog"))
+    }
+
     private fun bake(key: String, cube: Cube, curve: FloatArray) {
+        saveFlog(key, cube)
         val n = GRID
         val out = ByteBuffer.allocate(n * n * n * 8).order(ByteOrder.nativeOrder())
         val tmp = FloatArray(3)

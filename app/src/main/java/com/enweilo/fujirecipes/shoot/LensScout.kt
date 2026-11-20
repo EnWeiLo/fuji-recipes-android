@@ -34,9 +34,16 @@ class LensScout(private val context: Context) {
     /** One stop on the zoom row: open [cameraId] at [zoom]; shown as [ratio] (relative to the main lens). */
     data class Entry(val ratio: Float, val cameraId: String, val zoom: Float)
 
-    data class Plan(val mode: Mode, val entries: List<Entry>, val notes: List<String>) {
+    data class Plan(
+        val mode: Mode,
+        val entries: List<Entry>,
+        val notes: List<String>,
+        /** equivalent focal length of the main lens (1×), to tell how far a RAW frame must be cropped */
+        val mainEq: Float = 0f,
+    ) {
         fun toJson(): String = JSONObject().apply {
             put("mode", mode.name)
+            put("mainEq", mainEq.toDouble())
             put("entries", JSONArray().apply {
                 entries.forEach { put(JSONObject().put("r", it.ratio.toDouble()).put("id", it.cameraId).put("z", it.zoom.toDouble())) }
             })
@@ -55,13 +62,14 @@ class LensScout(private val context: Context) {
                         Entry(j.getDouble("r").toFloat(), j.getString("id"), j.getDouble("z").toFloat())
                     },
                     (0 until n.length()).map { n.getString(it) },
+                    o.optDouble("mainEq", 0.0).toFloat(),
                 )
             }.getOrNull()
         }
     }
 
     private val prefs = context.getSharedPreferences("lenses", Context.MODE_PRIVATE)
-    private val key = "plan:" + Build.FINGERPRINT
+    private val key = "plan3:" + Build.FINGERPRINT
 
     fun cached(): Plan? = prefs.getString(key, null)?.let { Plan.fromJson(it) }
 
@@ -114,11 +122,20 @@ class LensScout(private val context: Context) {
         val main = cams.firstOrNull { it.listed } ?: return Plan(Mode.CameraX, emptyList(), notes + "找不到公開的後鏡頭")
         val mainEq = main.eq
 
-        // 1. the phone already shares its lenses openly
-        val listedFocals = cams.filter { it.listed }.map { it.eq }.distinctBy { (it / mainEq * 10).roundToInt() }
-        if (main.zoomMin < 0.95f || listedFocals.size >= 2) {
-            return Plan(Mode.CameraX, emptyList(), notes + "手機公開了多顆鏡頭，用一般模式")
+        // 1. the phone already shares its lenses openly (a combined camera, or separate listed cameras).
+        //    Still driven directly, because only that way the RAW frame is available.
+        if (main.zoomMin < 0.95f) {
+            val stops = mutableListOf(main.zoomMin, 1f)
+            for (pid in main.physical) {
+                val peq = runCatching { Camera2Backend.equivalent(cm.getCameraCharacteristics(pid)) }.getOrNull() ?: continue
+                val r = peq / mainEq
+                if (r > 1.3f && r <= main.zoomMax) stops += r
+            }
+            val entries = stops.distinctBy { (it * 20).roundToInt() }.sorted().map { Entry(it, main.id, it) }
+            return Plan(Mode.Combined, entries, notes + "使用公開的組合相機 ${main.id}", mainEq)
         }
+        val listedSingles = cams.filter { it.listed }.sortedBy { it.eq }
+            .fold(mutableListOf<Cam>()) { acc, c -> if (acc.none { abs(it.eq - c.eq) / it.eq < 0.08f }) acc += c; acc }
 
         val thread = HandlerThread("scout").apply { start() }
         val handler = Handler(thread.looper)
@@ -134,23 +151,24 @@ class LensScout(private val context: Context) {
                     if (r > 1.3f && r <= c.zoomMax) stops += r
                 }
                 val entries = stops.distinctBy { (it * 20).roundToInt() }.sorted().map { Entry(it, c.id, it) }
-                return Plan(Mode.Combined, entries, notes + "使用未公開的組合相機 ${c.id}")
+                return Plan(Mode.Combined, entries, notes + "使用未公開的組合相機 ${c.id}", mainEq)
             }
 
             // 3. separate lenses, the hidden ones opened one by one
-            val singles = mutableListOf(main)
+            val singles = (listedSingles.ifEmpty { listOf(main) }).toMutableList()
             for (c in cams.filter { !it.listed && !it.logical }.sortedBy { it.eq }) {
                 if (singles.any { abs(it.eq - c.eq) / it.eq < 0.08f }) continue
                 if (tryOpen(cm, c.id, handler)) singles += c else notes += "相機 ${c.id} 打不開"
             }
             if (singles.size >= 2) {
                 val entries = singles.sortedBy { it.eq }.map { Entry(it.eq / mainEq, it.id, 1f) }
-                return Plan(Mode.Separate, entries, notes + "使用分開的鏡頭：" + entries.joinToString("、") { "相機 ${it.cameraId}" })
+                return Plan(Mode.Separate, entries, notes + "使用分開的鏡頭：" + entries.joinToString("、") { "相機 ${it.cameraId}" }, mainEq)
             }
         } finally {
             thread.quitSafely()
         }
-        return Plan(Mode.CameraX, emptyList(), notes + "沒有其他可用的後鏡頭，放大是數位裁切")
+        // only the main lens: still driven directly (for RAW), zoom is digital
+        return Plan(Mode.Combined, listOf(Entry(1f, main.id, 1f)), notes + "只有主鏡頭可用，放大是數位裁切", mainEq)
     }
 
     @SuppressLint("MissingPermission")

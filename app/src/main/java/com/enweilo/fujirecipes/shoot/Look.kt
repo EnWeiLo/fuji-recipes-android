@@ -28,6 +28,10 @@ data class Look(
     val chromeBlue: Float = 0f,
     val grain: Float = 0f,
     val grainCells: Float = 1400f,
+    /** recipe sharpness, noise reduction and clarity (−4…+4); used when developing RAW */
+    val sharp: Float = 0f,
+    val nr: Float = 0f,
+    val clarity: Float = 0f,
 ) {
     companion object {
         val LUMA = floatArrayOf(0.2126f, 0.7152f, 0.0722f)
@@ -120,6 +124,9 @@ data class Look(
                 chromeBlue = fx(r.colorChromeBlue),
                 grain = grain,
                 grainCells = cells,
+                sharp = num(r.sharpness),
+                nr = num(r.nr),
+                clarity = num(r.clarity),
             )
         }
 

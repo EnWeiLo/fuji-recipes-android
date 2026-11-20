@@ -94,12 +94,29 @@ class ShootTest {
             inst.runOnMainSync { c.shoot.selectRecipe("shoot-test") }
             Thread.sleep(2000)
             shot(inst, "shoot_02_recipe")
-            if (useCamera) inst.runOnMainSync { c.shoot.shutter() }
-            val end = System.currentTimeMillis() + if (useCamera) 20_000 else 0
-            while (System.currentTimeMillis() < end && c.shoot.lastUri == null) Thread.sleep(300)
-            Thread.sleep(800)
-            shot(inst, "shoot_03_after_shot")
-            Thread.sleep(3000)
+            if (useCamera) {
+                inst.runOnMainSync { c.shoot.changeReviewMode(3) }
+                Thread.sleep(1500)
+                log(inst, "mode ${c.shoot.lensMode} | ${c.shoot.rawReport}")
+                // 1) RAW (if the camera gives it)
+                inst.runOnMainSync { c.shoot.shutter() }
+                waitShot(c)
+                Thread.sleep(600)
+                shot(inst, "shoot_03_review")
+                log(inst, "review: ${c.shoot.review?.info}")
+                copyOut(inst, c.shoot.lastUri, "shoot_05_result_raw")
+                inst.runOnMainSync { c.shoot.dismissReview() }
+                // 2) the same through the phone's JPEG, to compare brightness and colour
+                inst.runOnMainSync { c.shoot.changeRaw(false) }
+                Thread.sleep(3500)
+                val before = c.shoot.lastUri
+                inst.runOnMainSync { c.shoot.shutter() }
+                waitShot(c, before)
+                log(inst, "review2: ${c.shoot.review?.info}")
+                copyOut(inst, c.shoot.lastUri, "shoot_06_result_jpeg")
+                inst.runOnMainSync { c.shoot.dismissReview(); c.shoot.changeRaw(true); c.shoot.changeReviewMode(1) }
+                Thread.sleep(2500)
+            }
             shot(inst, "shoot_03b_later")
             log(inst, "lastUri ${c.shoot.lastUri} capturing ${c.shoot.capturing} processing ${c.shoot.processing} toast ${c.toast?.text}")
             c.shoot.cameraReport.forEach { log(inst, it) }
@@ -109,6 +126,19 @@ class ShootTest {
             Thread.sleep(800)
             shot(inst, "shoot_04_settings")
         }
+    }
+
+    private fun waitShot(c: AppController, before: android.net.Uri? = null) {
+        val end = System.currentTimeMillis() + 40_000
+        while (System.currentTimeMillis() < end && (c.shoot.lastUri == null || c.shoot.lastUri == before || c.shoot.processing > 0)) Thread.sleep(300)
+    }
+
+    private fun copyOut(inst: android.app.Instrumentation, uri: android.net.Uri?, name: String) {
+        if (uri == null) { log(inst, "$name: no photo"); return }
+        val bmp = inst.targetContext.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = 2 }) }
+        if (bmp == null) { log(inst, "$name: cannot read"); return }
+        log(inst, "$name: ${bmp.width}x${bmp.height}")
+        save(inst.targetContext, name, bmp)
     }
 
     private fun grid(tiles: List<Bitmap>, cols: Int): Bitmap {

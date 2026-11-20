@@ -50,7 +50,9 @@ class MainActivity : ComponentActivity() {
         val c = controller
         val volume = keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP || keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN
         if (volume && c.tab == Tab.Shoot && c.stack.isEmpty() && c.shoot.volumeShutter) {
-            if (event.repeatCount == 0) c.shoot.shutter()
+            if (event.repeatCount == 0) {
+                if (c.shoot.review != null) c.shoot.dismissReview() else c.shoot.shutter()
+            }
             return true
         }
         return super.onKeyDown(keyCode, event)

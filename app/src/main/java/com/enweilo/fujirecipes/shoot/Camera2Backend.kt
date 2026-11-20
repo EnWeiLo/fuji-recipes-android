@@ -62,6 +62,36 @@ class Camera2Backend(private val context: Context, val id: String) {
     private val awbModes = ch.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.toSet() ?: emptySet()
     private val afModes = ch.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?.toSet() ?: emptySet()
 
+    /** Biggest RAW picture this camera gives apps, or null when it does not share RAW. */
+    val rawSize: Size? = run {
+        val caps = ch.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.toSet() ?: emptySet()
+        if (CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW !in caps) return@run null
+        ch.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.getOutputSizes(ImageFormat.RAW_SENSOR)
+            ?.maxByOrNull { it.width.toLong() * it.height }
+    }
+    /** Ask for RAW too (set before [open]). */
+    @Volatile var wantRaw = true
+    /** true when the running session really delivers RAW. */
+    @Volatile var rawActive = false
+        private set
+    private var rawReader: ImageReader? = null
+    private val shadingModes = ch.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_LENS_SHADING_MAP_MODES)?.toSet() ?: emptySet()
+
+    /** One picture: the camera's JPEG and, when available, the RAW frame with what is needed to develop it. */
+    class Shot(val jpeg: ByteArray, val raw: RawFrame?)
+
+    class RawFrame(
+        val width: Int,
+        val height: Int,
+        /** RAW16 pixels, packed (row stride = width × 2), native byte order */
+        val pixels: java.nio.ByteBuffer,
+        val result: TotalCaptureResult,
+        /** the lens that took it (inside a combined camera), or the camera itself */
+        val chars: CameraCharacteristics,
+        val physicalResult: CaptureResult?,
+        val physicalId: String?,
+    )
+
     // ---------------- settings the controller changes ----------------
 
     @Volatile var zoom = 1f
@@ -103,6 +133,8 @@ class Camera2Backend(private val context: Context, val id: String) {
         previewSurface = surface
         val js = jpegSize()
         reader = ImageReader.newInstance(js.width, js.height, ImageFormat.JPEG, 2)
+        val rs = rawSize
+        rawReader = if (wantRaw && rs != null) runCatching { ImageReader.newInstance(rs.width, rs.height, ImageFormat.RAW_SENSOR, 2) }.getOrNull() else null
         try {
             cm.openCamera(id, object : CameraDevice.StateCallback() {
                 override fun onOpened(d: CameraDevice) {
@@ -130,15 +162,25 @@ class Camera2Backend(private val context: Context, val id: String) {
         val d = device ?: return
         val ps = previewSurface ?: return
         val r = reader ?: return
+        val rr = rawReader
         try {
-            d.createCaptureSession(listOf(ps, r.surface), object : CameraCaptureSession.StateCallback() {
+            val outs = if (rr != null) listOf(ps, r.surface, rr.surface) else listOf(ps, r.surface)
+            d.createCaptureSession(outs, object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(s: CameraCaptureSession) {
                     if (closed) { s.close(); return }
                     session = s
+                    rawActive = rr != null
                     repeat()
                     main.post { onReady(true) }
                 }
                 override fun onConfigureFailed(s: CameraCaptureSession) {
+                    if (rr != null) {
+                        // this camera cannot stream RAW next to the others; carry on without it
+                        runCatching { rr.close() }
+                        rawReader = null
+                        startSession(onReady)
+                        return
+                    }
                     main.post { onReady(false) }
                 }
             }, handler)
@@ -245,37 +287,97 @@ class Camera2Backend(private val context: Context, val id: String) {
         }
     }
 
-    /** Takes a picture. [onJpeg] gets the bytes on the main thread (null on failure). */
-    fun capture(onJpeg: (ByteArray?) -> Unit) {
+    /** Takes a picture. [onShot] gets it on the main thread (null on failure). */
+    fun capture(onShot: (Shot?) -> Unit) {
         handler.post {
             val s = session
             val d = device
             val r = reader
             val ps = previewSurface
-            if (s == null || d == null || r == null || ps == null) { main.post { onJpeg(null) }; return@post }
+            if (s == null || d == null || r == null || ps == null) { main.post { onShot(null) }; return@post }
+            val rr = if (rawActive) rawReader else null
+
+            var jpeg: ByteArray? = null
+            var rawBuf: java.nio.ByteBuffer? = null
+            var rawW = 0
+            var rawH = 0
+            var total: TotalCaptureResult? = null
+            var delivered = false
+            fun finish(failed: Boolean = false) {
+                if (delivered) return
+                if (failed) { delivered = true; main.post { onShot(null) }; return }
+                val j = jpeg ?: return
+                if (rr != null && (rawBuf == null || total == null)) return
+                delivered = true
+                val res = total
+                val frame = if (rr != null && res != null && rawBuf != null) {
+                    val pid = if (Build.VERSION.SDK_INT >= 29) res.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) else null
+                    val pc = pid?.let { runCatching { cm.getCameraCharacteristics(it) }.getOrNull() }
+                    val pr = if (pid != null && Build.VERSION.SDK_INT >= 31) runCatching { res.physicalCameraTotalResults[pid] }.getOrNull()
+                    else if (pid != null) @Suppress("DEPRECATION") runCatching { res.physicalCameraResults[pid] }.getOrNull() else null
+                    RawFrame(rawW, rawH, rawBuf!!, res, pc ?: ch, pr, pid)
+                } else null
+                main.post { onShot(Shot(j, frame)) }
+            }
+            // stop waiting after a while; deliver what came (JPEG alone is fine)
+            handler.postDelayed({ if (!delivered && jpeg != null) { rawBuf = null; delivered = true; val j = jpeg!!; main.post { onShot(Shot(j, null)) } } else if (!delivered) finish(true) }, 6000)
+
             r.setOnImageAvailableListener({ rd ->
                 val img = runCatching { rd.acquireNextImage() }.getOrNull()
-                val bytes = img?.let {
+                jpeg = img?.let {
                     val buf = it.planes[0].buffer
                     ByteArray(buf.remaining()).also { b -> buf.get(b) }
                 }
                 img?.close()
                 rd.setOnImageAvailableListener(null, null)
-                main.post { onJpeg(bytes) }
+                if (jpeg == null) finish(true) else finish()
             }, handler)
+            rr?.setOnImageAvailableListener({ rd ->
+                val img = runCatching { rd.acquireNextImage() }.getOrNull()
+                if (img != null) {
+                    runCatching {
+                        val plane = img.planes[0]
+                        val w = img.width
+                        val h = img.height
+                        val src = plane.buffer
+                        val out = java.nio.ByteBuffer.allocateDirect(w * h * 2).order(java.nio.ByteOrder.nativeOrder())
+                        val row = ByteArray(w * 2)
+                        for (y in 0 until h) {
+                            src.position(y * plane.rowStride)
+                            src.get(row, 0, w * 2)
+                            out.put(row)
+                        }
+                        out.position(0)
+                        rawBuf = out; rawW = w; rawH = h
+                    }
+                    img.close()
+                }
+                rd.setOnImageAvailableListener(null, null)
+                finish()
+            }, handler)
+
+            val resultWatch = object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(ss: CameraCaptureSession, req: CaptureRequest, result: TotalCaptureResult) {
+                    total = result
+                    finish()
+                }
+                override fun onCaptureFailed(ss: CameraCaptureSession, req: CaptureRequest, f: android.hardware.camera2.CaptureFailure) {
+                    finish(true)
+                }
+            }
 
             fun shoot() {
                 runCatching {
                     val b = d.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
                     b.addTarget(r.surface)
+                    if (rr != null) b.addTarget(rr.surface)
                     b.addTarget(ps)
                     b.common(true)
-                    s.capture(b.build(), object : CameraCaptureSession.CaptureCallback() {
-                        override fun onCaptureFailed(s: CameraCaptureSession, req: CaptureRequest, f: android.hardware.camera2.CaptureFailure) {
-                            main.post { onJpeg(null) }
-                        }
-                    }, handler)
-                }.onFailure { main.post { onJpeg(null) } }
+                    if (rr != null && CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_ON in shadingModes) {
+                        b.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_ON)
+                    }
+                    s.capture(b.build(), resultWatch, handler)
+                }.onFailure { finish(true) }
             }
 
             if ((flash == 1 || flash == 2) && hasFlash) {
@@ -302,7 +404,7 @@ class Camera2Backend(private val context: Context, val id: String) {
                     val b = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(ps); common(false) }
                     s.setRepeatingRequest(b.build(), watcher, handler)
                 }
-                handler.postDelayed({ if (!done) { done = true; shoot() } ; repeat() }, 1200)
+                handler.postDelayed({ if (!done) { done = true; shoot() }; repeat() }, 1200)
             } else {
                 shoot()
             }
@@ -315,6 +417,7 @@ class Camera2Backend(private val context: Context, val id: String) {
             runCatching { session?.close() }
             runCatching { device?.close() }
             runCatching { reader?.close() }
+            runCatching { rawReader?.close() }
             session = null
             device = null
             reader = null

@@ -80,6 +80,9 @@ class ShootController(
 
     var installed by mutableStateOf(luts.installed())
         private set
+    /** Film simulations whose original LUT is kept (needed for RAW). */
+    var installedFlog by mutableStateOf(luts.installedFlog())
+        private set
     var lutBusy by mutableStateOf(false)
         private set
     var lutProgress by mutableFloatStateOf(0f)
@@ -96,9 +99,11 @@ class ShootController(
 
     private val gl = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val processor = PhotoProcessor(luts)
+    private val rawDev = RawDeveloper(luts)
 
     /** Looks at the LUT folder again (cheap). */
     fun refreshLuts() {
+        installedFlog = luts.installedFlog()
         val now = luts.installed()
         if (now != installed) {
             installed = now
@@ -147,6 +152,8 @@ class ShootController(
     private fun finishInstall(result: Result<Int>) {
         lutBusy = false
         installed = luts.installed()
+        installedFlog = luts.installedFlog()
+        scope.launch(gl) { rawDev.resetLut() }
         lutVersion++
         scope.launch(gl) { processor.resetLut() }
         result.onSuccess { n ->
@@ -191,6 +198,45 @@ class ShootController(
     val feedback = Feedback(app)
 
     fun changeShutterSound(on: Boolean) { shutterSoundOn = on; prefs.edit().putBoolean("shutterSound", on).apply() }
+
+    /** Develop from RAW when the phone allows it. */
+    var rawEnabled by mutableStateOf(prefs.getBoolean("raw", true))
+        private set
+    fun changeRaw(on: Boolean) {
+        rawEnabled = on
+        prefs.edit().putBoolean("raw", on).apply()
+        bound?.let { start(it.first, it.second) }
+    }
+
+    /** Show the photo after taking it: 0 off, 1 = 1.5 s, 2 = 3 s, 3 = until closed. */
+    var reviewMode by mutableIntStateOf(prefs.getInt("review", 1))
+        private set
+    fun changeReviewMode(m: Int) { reviewMode = m; prefs.edit().putInt("review", m).apply() }
+
+    /** The photo just taken, shown over the viewfinder. */
+    data class Review(
+        val id: Int,
+        val quick: Bitmap? = null,
+        val final: Bitmap? = null,
+        val uri: Uri? = null,
+        val info: String = "",
+        val busy: Boolean = true,
+    )
+    var review by mutableStateOf<Review?>(null)
+        private set
+    private var reviewSeq = 0
+    fun dismissReview() { review = null }
+
+    /** Lines about RAW for 設定 → 相機資訊. */
+    var rawReport by mutableStateOf("")
+        private set
+
+    fun deleteLast(uri: Uri) {
+        runCatching { app.contentResolver.delete(uri, null, null) }
+        if (lastUri == uri) { lastUri = null; lastThumb = null }
+        review = null
+        toast("已刪除")
+    }
 
     fun changeSaveOriginal(on: Boolean) { saveOriginal = on; prefs.edit().putBoolean("saveOriginal", on).apply() }
     fun changeVolumeShutter(on: Boolean) { volumeShutter = on; prefs.edit().putBoolean("volumeShutter", on).apply() }
@@ -452,6 +498,7 @@ class ShootController(
         b.evIndex = (ev / evStep).roundToInt()
         b.flash = flashCode()
         b.awbMode = currentRecipe()?.let { awbMode(it) } ?: CameraMetadata.CONTROL_AWB_MODE_AUTO
+        b.wantRaw = rawEnabled
         val size = b.previewSize()
         view.directSurface(size.width, size.height, b.sensorOrientation) { surface ->
             if (c2b !== b) return@directSurface
@@ -460,6 +507,13 @@ class ShootController(
                 if (ok) {
                     usingHidden = true
                     cameraReady = true
+                    val rs = b.rawSize
+                    rawReport = when {
+                        rs == null -> "RAW：相機 $id 沒有開放 RAW 給 App"
+                        !rawEnabled -> "RAW：支援（${rs.width}×${rs.height}），目前關閉"
+                        b.rawActive -> "RAW：使用中（${rs.width}×${rs.height}）"
+                        else -> "RAW：支援，但無法和預覽同時使用"
+                    }
                 } else if (attempt < 2) {
                     // the picture surface may still be held by the camera we just left; try again shortly
                     b.close()
@@ -828,6 +882,8 @@ class ShootController(
         shutterCount++
         feedback.shutter()
         if (shutterSoundOn) feedback.shutterSound()
+        val id = ++reviewSeq
+        if (reviewMode != 0) review = Review(id)
         ic.takePicture(ContextCompat.getMainExecutor(app), object : ImageCapture.OnImageCapturedCallback() {
             override fun onCaptureSuccess(image: ImageProxy) {
                 capturing = false
@@ -840,18 +896,20 @@ class ShootController(
                 } finally {
                     image.close()
                 }
-                if (bytes == null) { toast("拍照失敗"); return }
+                if (bytes == null) { toast("拍照失敗"); if (review?.id == id) review = null; return }
                 processing++
                 scope.launch {
                     val result = withContext(gl) {
                         runCatching { develop(bytes, rotation, wantTurn, sensorTurn, recipe, look, ratioNow, keepOriginal) }
                     }
                     processing--
-                    result.onSuccess { (uri, thumb) ->
-                        lastUri = uri
-                        lastThumb = thumb
+                    result.onSuccess { r ->
+                        lastUri = r.uri
+                        lastThumb = r.thumb
+                        review?.let { if (it.id == id) review = it.copy(final = r.preview, uri = r.uri, info = r.info, busy = false) }
                     }.onFailure { e ->
                         toast("儲存失敗：" + (e.message ?: e.javaClass.simpleName))
+                        if (review?.id == id) review = null
                     }
                 }
             }
@@ -882,34 +940,196 @@ class ShootController(
         val screen = when (targetRotation) { Surface.ROTATION_90 -> 90; Surface.ROTATION_180 -> 180; Surface.ROTATION_270 -> 270; else -> 0 }
         val turn = ((b.sensorOrientation - screen) % 360 + 360) % 360
         val lens = lensName()
+        val zoomNow = zoom
+        val separate = plan?.mode == LensScout.Mode.Separate
+        val mainEq = plan?.mainEq ?: 0f
+        val awbUsed = b.awbMode
         capturing = true
         shutterCount++
         feedback.shutter()
         if (shutterSoundOn) feedback.shutterSound()
-        b.capture { bytes ->
+        val id = ++reviewSeq
+        if (reviewMode != 0) review = Review(id)
+        b.capture { shot ->
             capturing = false
-            if (bytes == null) { toast("拍照失敗"); return@capture }
+            if (shot == null) { toast("拍照失敗"); if (review?.id == id) review = null; return@capture }
             processing++
             scope.launch {
+                if (reviewMode != 0) {
+                    val q = withContext(gl) { runCatching { quickPreview(shot.jpeg, look, ratioNow, turn) }.getOrNull() }
+                    review?.let { if (it.id == id) review = it.copy(quick = q) }
+                }
                 val result = withContext(gl) {
-                    runCatching { develop(bytes, 0, turn, b.sensorOrientation, recipe, look, ratioNow, keepOriginal, forceTurn = turn, lens = lens) }
+                    runCatching {
+                        developShot(shot, recipe, look, ratioNow, keepOriginal, turn, lens, zoomNow, separate, mainEq, awbUsed, b.sensorOrientation)
+                    }
                 }
                 processing--
-                result.onSuccess { (uri, thumb) ->
-                    lastUri = uri
-                    lastThumb = thumb
-                }.onFailure { e -> toast("儲存失敗：" + (e.message ?: e.javaClass.simpleName)) }
+                result.onSuccess { r ->
+                    lastUri = r.uri
+                    lastThumb = r.thumb
+                    review?.let { if (it.id == id) review = it.copy(final = r.preview, uri = r.uri, info = r.info, busy = false) }
+                }.onFailure { e ->
+                    toast("儲存失敗：" + (e.message ?: e.javaClass.simpleName))
+                    if (review?.id == id) review = null
+                }
             }
         }
     }
+
+    class DevResult(val uri: Uri?, val thumb: Bitmap?, val preview: Bitmap?, val info: String)
+
+    /** A quick, small version of the look for the review screen, ready in a moment. */
+    private fun quickPreview(jpeg: ByteArray, look: Look, ratio: Ratio, turn: Int): Bitmap {
+        val b0 = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, b0)
+        var sample = 1
+        while (max(b0.outWidth, b0.outHeight) / (sample * 2) >= 1400) sample *= 2
+        val full = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, BitmapFactory.Options().apply {
+            inSampleSize = sample; inMutable = true; inPreferredConfig = Bitmap.Config.ARGB_8888
+        }) ?: error("decode")
+        val r = cropRect(full.width, full.height, ratio)
+        var bmp = Bitmap.createBitmap(full, r.left, r.top, r.width(), r.height())
+        if (bmp === full || !bmp.isMutable) bmp = bmp.copy(Bitmap.Config.ARGB_8888, true)
+        if (look !== Look.NONE) processor.process(bmp, look)
+        return turned(bmp, turn)
+    }
+
+    private fun turned(bmp: Bitmap, deg: Int): Bitmap {
+        if (deg % 360 == 0) return bmp
+        val m = Matrix().apply { postRotate(deg.toFloat()) }
+        return Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+    }
+
+    /** A screen-sized, upright copy for the review screen. */
+    private fun displayCopy(bmp: Bitmap, turn: Int): Bitmap {
+        val k = min(1f, 1600f / max(bmp.width, bmp.height))
+        val small = if (k < 1f) Bitmap.createScaledBitmap(bmp, (bmp.width * k).toInt(), (bmp.height * k).toInt(), true) else bmp.copy(Bitmap.Config.ARGB_8888, false)
+        return turned(small, turn)
+    }
+
+    private fun shotInfo(recipe: Recipe?, how: String, lens: String?, exif: ExifInterface?): String {
+        val parts = mutableListOf<String>()
+        parts += recipe?.name?.ifEmpty { "未命名" } ?: "不套用"
+        parts += how
+        if (lens != null) parts += lens
+        exif?.getAttribute(ExifInterface.TAG_EXPOSURE_TIME)?.toDoubleOrNull()?.let {
+            parts += if (it >= 1) "%.1fs".format(it) else "1/${(1 / it).roundToInt()}"
+        }
+        exif?.getAttribute(ExifInterface.TAG_F_NUMBER)?.toDoubleOrNull()?.let { parts += "f/%.1f".format(it) }
+        exif?.getAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY)?.let { parts += "ISO $it" }
+        return parts.joinToString(" · ")
+    }
+
+    private fun nominalKelvin(awb: Int): Float? = when (awb) {
+        CameraMetadata.CONTROL_AWB_MODE_INCANDESCENT -> 2850f
+        CameraMetadata.CONTROL_AWB_MODE_WARM_FLUORESCENT -> 3000f
+        CameraMetadata.CONTROL_AWB_MODE_FLUORESCENT -> 4200f
+        CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT -> 5500f
+        CameraMetadata.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT -> 6500f
+        CameraMetadata.CONTROL_AWB_MODE_SHADE -> 7500f
+        else -> null
+    }
+
+    /** RAW when possible (bright enough, LUT available), otherwise the camera's JPEG. Runs on the GL thread. */
+    private fun developShot(
+        shot: Camera2Backend.Shot, recipe: Recipe?, look: Look, ratio: Ratio, keepOriginal: Boolean, turn: Int,
+        lens: String, zoomNow: Float, separate: Boolean, mainEq: Float, awbUsed: Int, sensorOrientation: Int,
+    ): DevResult {
+        val raw = shot.raw
+        if (raw != null && rawEnabled) {
+            val iso = raw.result.get(android.hardware.camera2.CaptureResult.SENSOR_SENSITIVITY) ?: 100
+            val expo = raw.result.get(android.hardware.camera2.CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+            val dark = iso >= 1600 || expo >= 66_000_000L
+            val lutOk = look.lutKey == null || look.lutKey in luts.installedFlog()
+            // how much of the RAW frame the photo shows
+            val native = if (!separate && raw.physicalId != null && mainEq > 0f) {
+                (com.enweilo.fujirecipes.shoot.Camera2Backend.equivalent(raw.chars) ?: mainEq) / mainEq
+            } else 1f
+            val crop = zoomNow / native
+            if (!dark && lutOk && crop >= 0.97f) {
+                val wb = floatArrayOf(1f, 1f, 1f)
+                if (recipe?.wb == "色溫") {
+                    val from = nominalKelvin(awbUsed)
+                    val to = recipe.kelvin.filter { it.isDigit() }.toFloatOrNull()
+                    if (from != null && to != null) RawDeveloper.adapt(from, to).copyInto(wb)
+                }
+                val dev = runCatching {
+                    rawDev.develop(raw, shot.jpeg, RawDeveloper.Job(look, ratio, crop.coerceAtLeast(1f), wb, sensorOrientation, iso))
+                }.getOrNull()
+                if (dev != null) return finishRaw(dev.bitmap, shot, raw, recipe, keepOriginal, turn, lens)
+            }
+        }
+        val how = when {
+            raw == null || !rawEnabled -> "一般"
+            else -> "一般（光線不足或不適用 RAW）"
+        }
+        return develop(shot.jpeg, 0, turn, sensorOrientation, recipe, look, ratio, keepOriginal, forceTurn = turn, lens = lens, how = how)
+    }
+
+    private fun orientationOf(turn: Int) = when (turn) {
+        90 -> ExifInterface.ORIENTATION_ROTATE_90
+        180 -> ExifInterface.ORIENTATION_ROTATE_180
+        270 -> ExifInterface.ORIENTATION_ROTATE_270
+        else -> ExifInterface.ORIENTATION_NORMAL
+    }
+
+    private fun finishRaw(
+        bmp: Bitmap, shot: Camera2Backend.Shot, raw: Camera2Backend.RawFrame, recipe: Recipe?, keepOriginal: Boolean,
+        turn: Int, lens: String,
+    ): DevResult {
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val orientation = orientationOf(turn)
+        if (keepOriginal) {
+            if (!saveDng(raw, orientation, "FUJI_${stamp}_原圖.dng")) {
+                val f = File(app.cacheDir, "orig.jpg")
+                f.writeBytes(shot.jpeg)
+                ExifInterface(f.absolutePath).apply { setAttribute(ExifInterface.TAG_ORIENTATION, orientation.toString()); saveAttributes() }
+                saveJpeg(f.readBytes(), "FUJI_${stamp}_原圖.jpg")
+                f.delete()
+            }
+        }
+        val srcExif = runCatching { ExifInterface(ByteArrayInputStream(shot.jpeg)) }.getOrNull()
+        val tmp = File(app.cacheDir, "shot.jpg")
+        tmp.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+        val thumb = thumbnail(bmp, orientation)
+        val preview = displayCopy(bmp, turn)
+        bmp.recycle()
+        val ex = ExifInterface(tmp.absolutePath)
+        if (srcExif != null) for (tag in COPY_TAGS) srcExif.getAttribute(tag)?.let { ex.setAttribute(tag, it) }
+        ex.setAttribute(ExifInterface.TAG_ORIENTATION, orientation.toString())
+        ex.setAttribute(ExifInterface.TAG_SOFTWARE, "富士食堂")
+        ex.setAttribute(ExifInterface.TAG_LENS_MODEL, lens)
+        ex.setAttribute(
+            ExifInterface.TAG_IMAGE_DESCRIPTION,
+            (if (recipe != null) "${recipe.name.ifEmpty { "未命名" }} · ${recipe.filmSim}" else "不套用") + " · RAW",
+        )
+        ex.saveAttributes()
+        val uri = saveJpeg(tmp.readBytes(), "FUJI_$stamp.jpg")
+        tmp.delete()
+        return DevResult(uri, thumb, preview, shotInfo(recipe, "RAW", lens, srcExif))
+    }
+
+    /** Saves the RAW frame as a DNG (Adobe's open RAW format). false if the phone's data does not allow it. */
+    private fun saveDng(raw: Camera2Backend.RawFrame, orientation: Int, name: String): Boolean = runCatching {
+        val creator = runCatching { android.hardware.camera2.DngCreator(raw.chars, raw.physicalResult ?: raw.result) }
+            .getOrElse { android.hardware.camera2.DngCreator(raw.chars, raw.result) }
+        creator.setOrientation(orientation)
+        val out = java.io.ByteArrayOutputStream(raw.width * raw.height * 2 + 65536)
+        raw.pixels.position(0)
+        creator.writeByteBuffer(out, android.util.Size(raw.width, raw.height), raw.pixels, 0)
+        creator.close()
+        raw.pixels.position(0)
+        saveFile(out.toByteArray(), name, "image/x-adobe-dng") != null
+    }.getOrDefault(false)
 
     /** Crops, applies the recipe, writes EXIF and saves. Runs on the GL thread. */
     @SuppressLint("NewApi")
     private fun develop(
         bytes: ByteArray, rotation: Int, wantTurn: Int, sensorTurn: Int,
         recipe: Recipe?, look: Look, ratio: Ratio, keepOriginal: Boolean,
-        forceTurn: Int? = null, lens: String? = null,
-    ): Pair<Uri?, Bitmap?> {
+        forceTurn: Int? = null, lens: String? = null, how: String = "一般",
+    ): DevResult {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val srcExif = ExifInterface(ByteArrayInputStream(bytes))
         val written = srcExif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_UNDEFINED)
@@ -967,6 +1187,7 @@ class ShootController(
         val tmp = File(app.cacheDir, "shot.jpg")
         tmp.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 95, it) }
         val thumb = thumbnail(bmp, orientation)
+        val preview = displayCopy(bmp, turn)
         bmp.recycle()
 
         // EXIF: keep the camera's own data (exposure, lens…) and add which recipe was used
@@ -982,7 +1203,7 @@ class ShootController(
 
         val uri = saveJpeg(tmp.readBytes(), "FUJI_$stamp.jpg")
         tmp.delete()
-        return uri to thumb
+        return DevResult(uri, thumb, preview, shotInfo(recipe, how, lens, srcExif))
     }
 
     private fun cropRect(w: Int, h: Int, ratio: Ratio): Rect {
@@ -1013,11 +1234,13 @@ class ShootController(
         return Bitmap.createBitmap(small, 0, 0, small.width, small.height, m, true)
     }
 
-    private fun saveJpeg(data: ByteArray, name: String): Uri? {
+    private fun saveJpeg(data: ByteArray, name: String): Uri? = saveFile(data, name, "image/jpeg")
+
+    private fun saveFile(data: ByteArray, name: String, mime: String): Uri? {
         if (Build.VERSION.SDK_INT >= 29) {
             val values = ContentValues().apply {
                 put(MediaStore.Images.Media.DISPLAY_NAME, name)
-                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.MIME_TYPE, mime)
                 put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/富士食堂")
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }

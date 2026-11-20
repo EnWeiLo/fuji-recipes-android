@@ -202,6 +202,7 @@ fun ShootTab(c: AppController, active: Boolean) {
                 } else {
                     Viewfinder(c, active, ui)
                 }
+                ReviewOverlay(s)
             }
             RecipeStrip(c)
             BottomControls(c, ui) { thumbBox = it }
@@ -888,7 +889,13 @@ private fun BottomControls(c: AppController, ui: Turn, onThumbPlaced: (Rect) -> 
                     if (!s.cameraReady) return@pointerInput
                     detectTapGestures(
                         onPress = { down = true; s.feedback.tick(); tryAwaitRelease(); down = false },
-                        onTap = { if (s.countdown > 0) s.cancelTimer() else s.shutter() },
+                        onTap = {
+                            when {
+                                s.review != null -> { s.dismissReview(); s.feedback.click() }
+                                s.countdown > 0 -> s.cancelTimer()
+                                else -> s.shutter()
+                            }
+                        },
                     )
                 },
             contentAlignment = Alignment.Center,
@@ -953,6 +960,112 @@ private fun Spinner() {
     }
 }
 
+/**
+ * The photo just taken, like a camera's image display: a quick version at once, the finished one when ready.
+ * Pinch to look closer; tap or swipe down (or touch the shutter) to go back.
+ */
+@Composable
+private fun ReviewOverlay(s: ShootController) {
+    val r = s.review
+    val context = LocalContext.current
+    AnimatedVisibility(r != null, enter = fadeIn(tween(120)) + scaleIn(initialScale = 0.96f), exit = fadeOut(tween(180))) {
+        val rv = r ?: return@AnimatedVisibility
+        LaunchedEffect(rv.id, s.reviewMode) {
+            val ms = when (s.reviewMode) { 1 -> 1500L; 2 -> 3000L; else -> 0L }
+            if (ms > 0) { delay(ms); if (s.review?.id == rv.id) s.dismissReview() }
+        }
+        var scale by remember(rv.id) { mutableFloatStateOf(1f) }
+        var pan by remember(rv.id) { mutableStateOf(Offset.Zero) }
+        var dragY by remember(rv.id) { mutableFloatStateOf(0f) }
+        Box(
+            Modifier.fillMaxSize().background(Ink.copy(alpha = (1f - abs(dragY) / 900f).coerceIn(0.4f, 1f)))
+                .pointerInput(rv.id) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        var moved = false
+                        var multi = false
+                        while (true) {
+                            val e = awaitPointerEvent()
+                            val pressed = e.changes.filter { it.pressed }
+                            if (pressed.isEmpty()) break
+                            if (pressed.size >= 2) {
+                                multi = true
+                                scale = (scale * e.calculateZoom()).coerceIn(1f, 6f)
+                                val pc = e.changes.first().let { it.position - it.previousPosition }
+                                pan += pc
+                                if (scale == 1f) pan = Offset.Zero
+                                e.changes.forEach { it.consume() }
+                            } else {
+                                val d = pressed[0].position - pressed[0].previousPosition
+                                if (abs(d.x) + abs(d.y) > 1f) moved = true
+                                if (scale > 1f) pan += d else dragY += d.y
+                                pressed[0].consume()
+                            }
+                        }
+                        when {
+                            !moved && !multi && scale == 1f -> s.dismissReview()
+                            scale == 1f && dragY > 160f -> s.dismissReview()
+                            else -> dragY = 0f
+                        }
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            val bmp = rv.final ?: rv.quick
+            if (bmp != null) {
+                val img = remember(bmp) { bmp.asImageBitmap() }
+                Image(
+                    img, null,
+                    Modifier.fillMaxSize().padding(8.dp).graphicsLayer {
+                        scaleX = scale; scaleY = scale
+                        translationX = pan.x; translationY = pan.y + dragY
+                    },
+                    contentScale = ContentScale.Fit,
+                )
+            }
+            if (rv.busy) {
+                Row(
+                    Modifier.align(Alignment.TopStart).padding(12.dp).clip(CircleShape).background(Color(0x99000000))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Spinner()
+                    Txt(if (bmp == null) "拍攝中…" else "處理中…", 12, FontWeight.Medium, Color.White, Modifier.padding(start = 6.dp))
+                }
+            }
+            if (rv.info.isNotEmpty()) {
+                Box(
+                    Modifier.align(Alignment.BottomCenter).padding(12.dp).clip(RoundedCornerShape(12.dp)).background(Color(0x99000000))
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                ) { Txt(rv.info, 12, FontWeight.Medium, Color.White, maxLines = 2) }
+            }
+            val uri = rv.uri
+            if (s.reviewMode == 3 && uri != null) {
+                Row(Modifier.align(Alignment.TopEnd).padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(
+                        Modifier.clip(CircleShape).background(Color(0x99000000)).press {
+                            s.feedback.click()
+                            runCatching {
+                                context.startActivity(
+                                    Intent.createChooser(
+                                        Intent(Intent.ACTION_SEND).setType("image/jpeg").putExtra(Intent.EXTRA_STREAM, uri)
+                                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                                        "分享照片",
+                                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                )
+                            }
+                        }.padding(horizontal = 14.dp, vertical = 8.dp),
+                    ) { Txt("分享", 13, FontWeight.SemiBold, Color.White) }
+                    Box(
+                        Modifier.clip(CircleShape).background(Color(0xCCB3261E)).press { s.feedback.click(); s.deleteLast(uri) }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    ) { Txt("刪除", 13, FontWeight.SemiBold, Color.White) }
+                }
+            }
+        }
+    }
+}
+
 /** For the settings page: shooting options, LUTs and what the phone's cameras allow. */
 @Composable
 fun ShootSettings(c: AppController) {
@@ -965,14 +1078,27 @@ fun ShootSettings(c: AppController) {
     Panel {
         ToggleRow("同時保存原圖", s.saveOriginal) { s.changeSaveOriginal(it) }
         Divider()
+        ToggleRow("RAW 成像（支援的手機）", s.rawEnabled) { s.changeRaw(it) }
+        Divider()
         ToggleRow("快門聲", s.shutterSoundOn) { s.changeShutterSound(it) }
         Divider()
         ToggleRow("音量鍵當快門", s.volumeShutter) { s.changeVolumeShutter(it) }
     }
     Spacer(Modifier.height(10.dp))
     Panel {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Txt("拍完顯示照片", 15, FontWeight.SemiBold)
+            SegmentedControl(listOf("關", "1.5 秒", "3 秒", "持續"), s.reviewMode) { s.changeReviewMode(it) }
+            Txt("「持續」會一直顯示到你點一下或往下滑，並提供分享和刪除。", 12, color = p.sub)
+        }
+    }
+    Spacer(Modifier.height(10.dp))
+    Panel {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             ValueRow("富士官方 LUT", if (s.installed.isEmpty()) "尚未下載" else "已安裝 ${s.installed.size} 種")
+            if (s.installed.isNotEmpty() && s.installedFlog.size < s.installed.size) {
+                Txt("RAW 成像需要再下載一次 LUT（舊版只保存了手機用的版本）。按下面的「重新下載」即可。", 12, color = p.danger)
+            }
             if (s.installed.isNotEmpty()) {
                 Txt(LutStore.NAMES.filterKeys { it in s.installed }.values.joinToString("、"), 12, color = p.sub)
             }
@@ -1001,6 +1127,7 @@ fun ShootSettings(c: AppController) {
                 s.cameraReport.forEach { Txt(it, 12, color = p.sub) }
             }
             if (s.lensMode.isNotEmpty()) Txt(s.lensMode, 13, FontWeight.Medium)
+            if (s.rawReport.isNotEmpty()) Txt(s.rawReport, 13, FontWeight.Medium)
             if (s.scanning) Txt("正在偵測鏡頭…", 12, color = p.sub)
             Spacer(Modifier.height(4.dp))
             SoftButton("重新偵測鏡頭", { s.rescanLenses() })
