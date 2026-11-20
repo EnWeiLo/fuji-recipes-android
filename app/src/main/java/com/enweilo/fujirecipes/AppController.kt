@@ -110,22 +110,32 @@ class AppController(private val app: Application) {
         prefs.edit().putBoolean("autoUpdate", on).apply()
     }
 
-    /** [manual] = the user asked; otherwise it is the quiet check at launch. */
+    private var lastCheckAt = 0L
+
+    /** The app came to the front: check again if the last look was more than 30 minutes ago. */
+    fun onForeground() {
+        if (System.currentTimeMillis() - lastCheckAt > 30 * 60_000L) checkForUpdate(manual = false)
+    }
+
+    /** [manual] = the user asked; otherwise it is the quiet check at launch / when coming back. */
     fun checkForUpdate(manual: Boolean) {
         if (checking || updateStatus.isNotEmpty()) return
         if (!manual && !autoUpdate) return
         checking = true
+        lastCheckAt = System.currentTimeMillis()
         if (manual) updateNote = "檢查中…"
         scope.launch {
             val release = withContext(Dispatchers.IO) { Updater.fetchLatest() }
             checking = false
+            val time = java.text.SimpleDateFormat("HH:mm", java.util.Locale.TAIWAN).format(java.util.Date())
             if (release == null) {
-                if (manual) updateNote = "無法連線，請稍後再試"
+                updateNote = "$time 檢查失敗：" + Updater.lastError.ifEmpty { "無法連線" }
+                lastCheckAt = System.currentTimeMillis() - 25 * 60_000L // try again in about 5 minutes
                 return@launch
             }
             val newer = Updater.isNewer(release, installedBuild)
             latest = if (newer) release else null
-            updateNote = if (newer) "有新版本 build ${release.build}" else "已是最新版本"
+            updateNote = (if (newer) "有新版本 build ${release.build}" else "已是最新版本") + "（$time 檢查）"
             if (newer && (manual || prefs.getInt("dismissedBuild", 0) != release.build)) updatePrompt = true
         }
     }

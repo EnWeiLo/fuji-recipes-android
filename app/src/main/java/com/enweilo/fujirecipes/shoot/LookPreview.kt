@@ -125,6 +125,34 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
         gl.post { attach(request) }
     }
 
+    /**
+     * For a camera driven directly (Camera2): makes a surface of [width]×[height] on our texture.
+     * [sensorDeg] is the camera's sensor orientation. [onSurface] runs on the main thread.
+     */
+    fun directSurface(width: Int, height: Int, sensorDeg: Int, onSurface: (Surface) -> Unit) {
+        mirror = false
+        // if the texture matrix already turns the picture, effectiveRotation() notices and uses screenOnlyDeg
+        rotationDeg = sensorDeg
+        screenOnlyDeg = 0
+        cameraTransform = false
+        gl.post {
+            val st = camTexture
+            if (st == null) {
+                pendingDirect = { directSurface(width, height, sensorDeg, onSurface) }
+                return@post
+            }
+            gotFrame = false
+            frameReady = false
+            st.setDefaultBufferSize(width, height)
+            frame = minOf(width, height).toFloat() / maxOf(width, height)
+            updateCrop()
+            val surface = Surface(st)
+            post { onSurface(surface) }
+        }
+    }
+
+    private var pendingDirect: (() -> Unit)? = null
+
     private fun attach(request: SurfaceRequest) {
         val st = camTexture
         if (st == null) {
@@ -212,6 +240,7 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
             null
         }
         pending?.let { pending = null; attach(it) }
+        pendingDirect?.let { pendingDirect = null; it() }
         draw()
     }
 

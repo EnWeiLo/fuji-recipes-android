@@ -40,6 +40,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        controller.onForeground()
+    }
+
     /** Volume keys take the picture on the 拍照 tab. */
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
         val c = controller

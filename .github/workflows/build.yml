@@ -71,6 +71,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest fuji-recipes.apk \
+          # a tiny file the app reads to see the newest build (no GitHub API rate limit)
+          echo "{\"build\": ${{ github.run_number }}, \"size\": $(stat -c %s fuji-recipes.apk)}" > version.json
+          gh release create latest fuji-recipes.apk version.json \
             --title "最新版 APK（build ${{ github.run_number }}）" \
             --notes "由 GitHub Actions 自動編譯。commit ${{ github.sha }}"

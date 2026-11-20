@@ -53,6 +53,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -319,9 +320,116 @@ class ShootController(
             val back = runCatching { p.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) }.getOrDefault(false)
             if (!back && hasFront) useFront = true
             if (lenses.isEmpty()) discoverLenses(p)
+            if (!hiddenChecked) {
+                hiddenChecked = true
+                hiddenId = runCatching { Camera2Backend.findHiddenCombined(app) }.getOrNull()
+            }
             if (bound?.second === view) start(owner, view)
         }, ContextCompat.getMainExecutor(app))
+        lifecycleOwner?.lifecycle?.removeObserver(lifecycleWatch)
+        lifecycleOwner = owner
+        owner.lifecycle.addObserver(lifecycleWatch)
     }
+
+    // ---------------- hidden combined camera (Camera2) ----------------
+
+    private var hiddenChecked = false
+    private var hiddenId: String? = null
+    /** Set when the hidden camera refused to work; then we stay with the normal camera. */
+    private var hiddenFailed = false
+    private var c2b: Camera2Backend? = null
+    /** true while the back camera runs through the hidden combined camera. */
+    var usingHidden by mutableStateOf(false)
+        private set
+    private var lifecycleOwner: LifecycleOwner? = null
+    private var reopenOnStart = false
+    private val lifecycleWatch = androidx.lifecycle.LifecycleEventObserver { _, e ->
+        when (e) {
+            androidx.lifecycle.Lifecycle.Event.ON_STOP -> if (c2b != null) {
+                c2b?.close(); c2b = null; cameraReady = false; reopenOnStart = true
+            }
+            androidx.lifecycle.Lifecycle.Event.ON_START -> if (reopenOnStart) {
+                reopenOnStart = false
+                bound?.let { start(it.first, it.second) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun mainBackEquivalent(): Float? = runCatching {
+        val cm = app.getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+        val id = cm.cameraIdList.firstOrNull {
+            cm.getCameraCharacteristics(it).get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) ==
+                android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+        } ?: return null
+        Camera2Backend.equivalent(cm.getCameraCharacteristics(id))
+    }.getOrNull()
+
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private fun startHidden(owner: LifecycleOwner, view: LookPreview, id: String, attempt: Int = 0) {
+        val wasCameraX = camera != null
+        provider?.unbindAll()
+        camera = null; capture = null; preview = null
+        c2b?.close()
+        c2b = null
+        cameraReady = false
+        if (wasCameraX && attempt == 0) {
+            // give CameraX a moment to release the picture surface
+            mainHandler.postDelayed({ if (bound?.second === view && !useFront) startHidden(owner, view, id, 1) }, 350)
+            return
+        }
+        val b = try {
+            Camera2Backend(app, id)
+        } catch (_: Throwable) {
+            hiddenFailed = true
+            start(owner, view)
+            return
+        }
+        c2b = b
+        zoomMin = b.zoomRange.first
+        zoomMax = b.zoomRange.second
+        zoom = 1f
+        evStep = b.evStep
+        evMin = b.evRange.first * evStep
+        evMax = b.evRange.second * evStep
+        val ratios = b.lensRatios(mainBackEquivalent())
+        lenses = ratios.map { Lens(it, null, it) }
+        lensIndex = ratios.indexOfFirst { abs(it - 1f) < 0.01f }.coerceAtLeast(0)
+        b.zoom = 1f
+        b.evIndex = (ev / evStep).roundToInt()
+        b.flash = flashCode()
+        b.awbMode = currentRecipe()?.let { awbMode(it) } ?: CameraMetadata.CONTROL_AWB_MODE_AUTO
+        val size = b.previewSize()
+        view.directSurface(size.width, size.height, b.sensorOrientation) { surface ->
+            if (c2b !== b) return@directSurface
+            b.open(surface) { ok ->
+                if (c2b !== b) return@open
+                if (ok) {
+                    usingHidden = true
+                    cameraReady = true
+                    if (cameraReport.none { it.startsWith("使用未公開") }) {
+                        cameraReport = cameraReport + ("使用未公開的組合相機 $id：" + lenses.joinToString("／") { it.label })
+                    }
+                } else if (attempt < 2) {
+                    // the picture surface may still be held by the camera we just left; try again shortly
+                    b.close()
+                    c2b = null
+                    mainHandler.postDelayed({ if (bound?.second === view && !useFront) startHidden(owner, view, id, attempt + 1) }, 400)
+                } else {
+                    b.close()
+                    c2b = null
+                    hiddenFailed = true
+                    usingHidden = false
+                    lenses = emptyList()
+                    toast("隱藏鏡頭打不開，改用一般模式")
+                    start(owner, view)
+                }
+            }
+        }
+    }
+
+    private fun flashCode() = when (flash) { FlashMode.Auto -> 1; FlashMode.On -> 2; FlashMode.Torch -> 3; else -> 0 }
 
     private fun c2(info: androidx.camera.core.CameraInfo) = androidx.camera.camera2.interop.Camera2CameraInfo.from(info)
 
@@ -531,6 +639,21 @@ class ShootController(
     @OptIn(ExperimentalCamera2Interop::class)
     private fun start(owner: LifecycleOwner, view: LookPreview) {
         val p = provider ?: return
+        val hid = hiddenId
+        if (!useFront && hid != null && !hiddenFailed) {
+            startHidden(owner, view, hid)
+            return
+        }
+        if (c2b != null) {
+            // let the directly driven camera let go before CameraX takes over
+            c2b?.close()
+            c2b = null
+            usingHidden = false
+            cameraReady = false
+            mainHandler.postDelayed({ if (bound?.second === view) start(owner, view) }, 350)
+            return
+        }
+        usingHidden = false
         p.unbindAll()
         cameraReady = false
         val selector = ResolutionSelector.Builder()
@@ -594,6 +717,11 @@ class ShootController(
 
     fun unbind() {
         bound = null
+        c2b?.close()
+        c2b = null
+        reopenOnStart = false
+        lifecycleOwner?.lifecycle?.removeObserver(lifecycleWatch)
+        lifecycleOwner = null
         provider?.unbindAll()
         camera = null
         capture = null
@@ -613,11 +741,19 @@ class ShootController(
     fun changeZoom(r: Float) {
         val v = r.coerceIn(zoomMin, max(zoomMin, zoomMax))
         zoom = v
+        c2b?.let { it.zoom = v; it.repeat(); return }
         camera?.cameraControl?.setZoomRatio(v)
     }
 
     fun changeEv(v: Float) {
         val idx = (v / evStep).roundToInt()
+        c2b?.let { b ->
+            val i = idx.coerceIn(b.evRange.first, b.evRange.second)
+            ev = i * evStep
+            b.evIndex = i
+            b.repeat()
+            return
+        }
         val range = camera?.cameraInfo?.exposureState?.exposureCompensationRange
         val clamped = if (range != null && !(range.lower == 0 && range.upper == 0)) idx.coerceIn(range.lower, range.upper) else idx
         ev = clamped * evStep
@@ -628,6 +764,17 @@ class ShootController(
 
     /** [x], [y] on the whole upright frame as shown on [display], 0..1 from its top-left. */
     fun focusAt(display: android.view.Display?, x: Float, y: Float, onResult: (Boolean) -> Unit = {}) {
+        c2b?.let { b ->
+            // upright frame (screen held upright) → sensor picture
+            val (sx, sy) = when (b.sensorOrientation) {
+                90 -> y to 1f - x
+                180 -> 1f - x to 1f - y
+                270 -> 1f - y to x
+                else -> x to y
+            }
+            b.focus(sx, sy, onResult)
+            return
+        }
         val cam = camera ?: return
         val factory = if (display != null) {
             androidx.camera.core.DisplayOrientedMeteringPointFactory(display, cam.cameraInfo, 1f, 1f)
@@ -646,6 +793,7 @@ class ShootController(
     }
 
     private fun applyFlash() {
+        c2b?.let { it.flash = flashCode(); it.repeat(); return }
         val ic = capture ?: return
         ic.flashMode = when (flash) {
             FlashMode.Auto -> ImageCapture.FLASH_MODE_AUTO
@@ -657,6 +805,11 @@ class ShootController(
 
     @OptIn(ExperimentalCamera2Interop::class)
     private fun applyWhiteBalance() {
+        c2b?.let { b ->
+            b.awbMode = currentRecipe()?.let { awbMode(it) } ?: CameraMetadata.CONTROL_AWB_MODE_AUTO
+            b.repeat()
+            return
+        }
         val cam = camera ?: return
         val r = currentRecipe()
         val mode = if (r == null) CameraMetadata.CONTROL_AWB_MODE_AUTO else awbMode(r)
@@ -696,7 +849,7 @@ class ShootController(
     // ---------------- taking a picture ----------------
 
     fun shutter() {
-        if (capturing || countdown > 0 || capture == null) return
+        if (capturing || countdown > 0 || (capture == null && c2b == null) || !cameraReady) return
         if (timer > 0) {
             timerJob = scope.launch {
                 for (s in timer downTo 1) {
@@ -723,6 +876,7 @@ class ShootController(
     }
 
     private fun takePicture() {
+        c2b?.let { takeHidden(it); return }
         val ic = capture ?: return
         val recipe = currentRecipe()
         val look = currentLook()
@@ -771,11 +925,52 @@ class ShootController(
         })
     }
 
+    /** Which lens the zoom ratio lands on, for EXIF. */
+    private fun lensName(): String {
+        val r = zoom
+        val tele = lenses.lastOrNull()?.ratio ?: 99f
+        return when {
+            r < 0.95f -> "超廣角"
+            tele > 1.3f && r >= tele - 0.02f -> "長焦"
+            else -> "主鏡頭"
+        } + " %.1fx".format(r)
+    }
+
+    private fun takeHidden(b: Camera2Backend) {
+        val recipe = currentRecipe()
+        val look = currentLook()
+        val ratioNow = ratio
+        val keepOriginal = saveOriginal
+        val screen = when (targetRotation) { Surface.ROTATION_90 -> 90; Surface.ROTATION_180 -> 180; Surface.ROTATION_270 -> 270; else -> 0 }
+        val turn = ((b.sensorOrientation - screen) % 360 + 360) % 360
+        val lens = lensName()
+        capturing = true
+        shutterCount++
+        feedback.shutter()
+        if (shutterSoundOn) feedback.shutterSound()
+        b.capture { bytes ->
+            capturing = false
+            if (bytes == null) { toast("拍照失敗"); return@capture }
+            processing++
+            scope.launch {
+                val result = withContext(gl) {
+                    runCatching { develop(bytes, 0, turn, b.sensorOrientation, recipe, look, ratioNow, keepOriginal, forceTurn = turn, lens = lens) }
+                }
+                processing--
+                result.onSuccess { (uri, thumb) ->
+                    lastUri = uri
+                    lastThumb = thumb
+                }.onFailure { e -> toast("儲存失敗：" + (e.message ?: e.javaClass.simpleName)) }
+            }
+        }
+    }
+
     /** Crops, applies the recipe, writes EXIF and saves. Runs on the GL thread. */
     @SuppressLint("NewApi")
     private fun develop(
         bytes: ByteArray, rotation: Int, wantTurn: Int, sensorTurn: Int,
         recipe: Recipe?, look: Look, ratio: Ratio, keepOriginal: Boolean,
+        forceTurn: Int? = null, lens: String? = null,
     ): Pair<Uri?, Bitmap?> {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val srcExif = ExifInterface(ByteArrayInputStream(bytes))
@@ -784,7 +979,7 @@ class ShootController(
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, dims)
         val tall = dims.outHeight > dims.outWidth
         val sideways = sensorTurn % 180 != 0
-        val turn = when {
+        val turn = if (forceTurn != null) forceTurn else when {
             // A sideways sensor gives a wide picture. A tall one was already stood up for an upright phone
             // (some phones always do that, whichever way the phone is held), so only the rest is left.
             sideways && tall -> ((wantTurn - sensorTurn) % 360 + 360) % 360
@@ -841,6 +1036,7 @@ class ShootController(
         for (tag in COPY_TAGS) srcExif.getAttribute(tag)?.let { ex.setAttribute(tag, it) }
         ex.setAttribute(ExifInterface.TAG_ORIENTATION, orientation.toString())
         ex.setAttribute(ExifInterface.TAG_SOFTWARE, "富士食譜")
+        if (lens != null) ex.setAttribute(ExifInterface.TAG_LENS_MODEL, lens)
         if (recipe != null) {
             ex.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "${recipe.name.ifEmpty { "未命名" }} · ${recipe.filmSim}")
         }

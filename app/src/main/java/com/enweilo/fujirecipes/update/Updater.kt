@@ -27,15 +27,56 @@ object Updater {
 
     fun isNewer(release: Release, installed: Long) = release.build > installed
 
-    /** Null when offline, rate-limited, or the release does not look right. */
-    fun fetchLatest(): Release? = try {
+    /** Why the last [fetchLatest] gave nothing (shown in settings). */
+    @Volatile
+    var lastError: String = ""
+
+    private const val BASE = "https://github.com/$REPO/releases/download/latest/"
+
+    /**
+     * Newest build. Reads the small version.json next to the APK first (a plain download, not limited like the
+     * GitHub API), then falls back to the API. Null when both fail; [lastError] says why.
+     */
+    fun fetchLatest(): Release? = fromVersionFile() ?: fromApi()
+
+    private fun fromVersionFile(): Release? = try {
+        val conn = URL(BASE + "version.json").openConnection() as HttpURLConnection
+        conn.connectTimeout = 8000
+        conn.readTimeout = 8000
+        conn.instanceFollowRedirects = true
+        conn.setRequestProperty("User-Agent", "fuji-recipes-android")
+        conn.setRequestProperty("Cache-Control", "no-cache")
+        try {
+            if (conn.responseCode != 200) {
+                lastError = "版本檔回應 ${conn.responseCode}"
+                null
+            } else {
+                val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                val build = json.optInt("build", -1)
+                if (build <= 0) null else {
+                    lastError = ""
+                    Release(build, "最新版 APK（build $build）", BASE + "fuji-recipes.apk", json.optLong("size"))
+                }
+            }
+        } finally {
+            conn.disconnect()
+        }
+    } catch (e: Exception) {
+        lastError = "無法連線（${e.javaClass.simpleName}）"
+        null
+    }
+
+    private fun fromApi(): Release? = try {
         val conn = URL("https://api.github.com/repos/$REPO/releases/tags/latest").openConnection() as HttpURLConnection
         conn.connectTimeout = 8000
         conn.readTimeout = 8000
         conn.setRequestProperty("Accept", "application/vnd.github+json")
         conn.setRequestProperty("User-Agent", "fuji-recipes-android")
         try {
-            if (conn.responseCode != 200) null else {
+            if (conn.responseCode != 200) {
+                lastError = if (conn.responseCode == 403 || conn.responseCode == 429) "GitHub 查詢次數已達上限，稍後再試" else "GitHub 回應 ${conn.responseCode}"
+                null
+            } else {
                 val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
                 val name = json.optString("name")
                 val build = Regex("build\\s*(\\d+)", RegexOption.IGNORE_CASE).find(name)?.groupValues?.get(1)?.toIntOrNull()
@@ -50,12 +91,13 @@ object Updater {
                         break
                     }
                 }
-                if (build == null || !url.startsWith("https://")) null else Release(build, name, url, size)
+                if (build == null || !url.startsWith("https://")) null else { lastError = ""; Release(build, name, url, size) }
             }
         } finally {
             conn.disconnect()
         }
     } catch (e: Exception) {
+        if (lastError.isEmpty()) lastError = "無法連線（${e.javaClass.simpleName}）"
         null
     }
 
