@@ -343,10 +343,15 @@ class ShootController(
         }
     }
 
-    /** [x], [y] in the camera picture, 0..1 from its top-left (sensor orientation). */
-    fun focusAt(x: Float, y: Float) {
+    /** [x], [y] on the whole upright frame as shown on [display], 0..1 from its top-left. */
+    fun focusAt(display: android.view.Display?, x: Float, y: Float) {
         val cam = camera ?: return
-        val point = SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f))
+        val factory = if (display != null) {
+            androidx.camera.core.DisplayOrientedMeteringPointFactory(display, cam.cameraInfo, 1f, 1f)
+        } else {
+            SurfaceOrientedMeteringPointFactory(1f, 1f)
+        }
+        val point = factory.createPoint(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f))
         val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
             .setAutoCancelDuration(4, java.util.concurrent.TimeUnit.SECONDS)
             .build()

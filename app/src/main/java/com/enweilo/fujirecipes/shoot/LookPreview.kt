@@ -17,6 +17,7 @@ import android.view.TextureView
 import androidx.camera.core.Preview
 import androidx.camera.core.SurfaceRequest
 import androidx.core.content.ContextCompat
+import kotlin.math.abs
 
 /**
  * Live viewfinder: camera frames go into an OpenGL texture and are drawn through [LookProgram] into this
@@ -49,6 +50,8 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
     }
 
     @Volatile private var rotationDeg = 90
+    @Volatile private var screenOnlyDeg = 0
+    @Volatile private var cameraTransform = false
     @Volatile private var mirror = false
     @Volatile private var lutDirty = false
 
@@ -82,17 +85,14 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
     }
 
     /**
-     * A point on this view ([nx], [ny] from the top-left, 0..1) as a point on the camera picture
-     * (0..1 from its top-left, sensor orientation), for tap-to-focus.
+     * A point on this view ([nx], [ny] from the top-left, 0..1) as a point on the whole upright camera frame
+     * (before cropping to the photo shape), for tap-to-focus.
      */
-    fun toSensor(nx: Float, ny: Float): Pair<Float, Float> {
+    fun toFrame(nx: Float, ny: Float): Pair<Float, Float> {
         val c = crop
-        val qx = c[0] + nx * c[2]
-        val qy = c[1] + (1f - ny) * c[3]
-        val m = LookProgram.rotation(rotationDeg, mirror)
-        val u = m[0] * qx + m[3] * qy + m[6]
-        val v = m[1] * qx + m[4] * qy + m[7]
-        return u to (1f - v)
+        val fx = c[0] + nx * c[2]
+        val fyUp = c[1] + (1f - ny) * c[3]
+        return fx to (1f - fyUp)
     }
 
     fun reloadLut() {
@@ -104,8 +104,19 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
     val surfaceProvider = Preview.SurfaceProvider { request ->
         val mirrorNow = mirror
         request.setTransformationInfoListener(ContextCompat.getMainExecutor(context)) { info ->
+            // When the camera writes its orientation into the SurfaceTexture (most phones), the texture matrix
+            // already stands the picture upright; only the screen's own rotation is left, and the screen is held
+            // upright while shooting. Otherwise turn it by the rotation CameraX reports.
+            val screen = when (info.targetRotation) {
+                Surface.ROTATION_90 -> 90
+                Surface.ROTATION_180 -> 180
+                Surface.ROTATION_270 -> 270
+                else -> 0
+            }
+            screenOnlyDeg = (360 - screen) % 360
             rotationDeg = info.rotationDegrees
-            mirror = mirrorNow
+            cameraTransform = info.hasCameraTransform()
+            mirror = info.isMirroring || mirrorNow
             redraw()
         }
         gl.post { attach(request) }
@@ -225,7 +236,7 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
             val l = look
             val hasLut = p.useLut(l.lutKey, store)
             p.draw(
-                oesTex, texMat, LookProgram.rotation(rotationDeg, mirror), crop, LookProgram.FULL,
+                oesTex, texMat, LookProgram.rotation(effectiveRotation(), mirror), crop, LookProgram.FULL,
                 viewH.toFloat() / viewW, l, hasLut, original,
             )
         }
@@ -234,6 +245,15 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
             gotFrame = true
             post { onFirstFrame?.invoke() }
         }
+    }
+
+    /**
+     * How far we still need to turn the picture. If the camera already put its orientation into the texture
+     * matrix (it then swaps the x and y axes for a sideways sensor), only the screen rotation is left.
+     */
+    private fun effectiveRotation(): Int {
+        val matrixTurns = abs(texMat[0]) < 0.5f && abs(texMat[1]) > 0.5f
+        return if (cameraTransform || matrixTurns) screenOnlyDeg else rotationDeg
     }
 
     private fun tearDown() {

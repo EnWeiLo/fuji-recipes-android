@@ -283,8 +283,8 @@ private fun Viewfinder(c: AppController, active: Boolean) {
                             focusAt = start
                             focusStamp = System.currentTimeMillis()
                             preview?.let { v ->
-                                val (sx, sy) = v.toSensor(start.x / wPx, start.y / hPx)
-                                s.focusAt(sx, sy)
+                                val (fx, fy) = v.toFrame(start.x / wPx, start.y / hPx)
+                                s.focusAt(v.display, fx, fy)
                             }
                         }
                     }
