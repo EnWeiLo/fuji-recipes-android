@@ -1,0 +1,146 @@
+package com.enweilo.fujirecipes
+
+import android.content.ContentValues
+import android.os.Environment
+import android.provider.MediaStore
+import androidx.test.core.app.ActivityScenario
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import com.enweilo.fujirecipes.polaroid.Frame
+import com.enweilo.fujirecipes.shoot.LutStore
+import org.junit.Assume.assumeTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/**
+ * Records screen clips of the app for the promo video (run with -e promo 1).
+ * Clips land in Pictures/rendercheck as rec_*.mp4.
+ */
+@RunWith(AndroidJUnit4::class)
+class PromoTest {
+
+    private val inst = InstrumentationRegistry.getInstrumentation()
+    private val dev = UiDevice.getInstance(inst)
+
+    private fun sh(cmd: String) {
+        inst.uiAutomation.executeShellCommand(cmd).use { pfd ->
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd).readBytes()
+        }
+    }
+
+    /** Starts screenrecord for [seconds] in the background. */
+    private fun record(name: String, seconds: Int) {
+        // an update offer from the launch check would sit on top of everything
+        dev.findObject(By.text("取消"))?.click()
+        Thread.sleep(300)
+        val pfd = inst.uiAutomation.executeShellCommand(
+            "screenrecord --size 720x1600 --bit-rate 16000000 --time-limit $seconds /sdcard/Pictures/rendercheck/rec_$name.mp4",
+        )
+        Thread {
+            runCatching { android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd).readBytes() }
+        }.start()
+        Thread.sleep(700)
+    }
+
+    @Test
+    fun recordClips() {
+        assumeTrue(InstrumentationRegistry.getArguments().getString("promo") == "1")
+        val ctx = inst.targetContext
+        val c = (ctx.applicationContext as FujiApp).controller
+
+        // a tidy phone: animations on, clean status bar
+        sh("settings put global animator_duration_scale 1")
+        sh("settings put global transition_animation_scale 1")
+        sh("settings put global window_animation_scale 1")
+        sh("settings put global sysui_demo_allowed 1")
+        sh("am broadcast -a com.android.systemui.demo -e command enter")
+        sh("am broadcast -a com.android.systemui.demo -e command clock -e hhmm 0941")
+        sh("am broadcast -a com.android.systemui.demo -e command battery -e level 100 -e plugged false")
+        sh("am broadcast -a com.android.systemui.demo -e command network -e wifi show -e level 4 -e mobile show -e datatype none -e level 4")
+        sh("am broadcast -a com.android.systemui.demo -e command notifications -e visible false")
+
+        val store = LutStore(ctx)
+        if (store.installedFlog().size < 10) {
+            val (url, _) = store.probeSize()
+            store.download(url) { _, _ -> }
+        }
+        inst.runOnMainSync {
+            c.changeAutoUpdate(false)
+            c.shoot.refreshLuts()
+            c.shoot.changeReviewMode(1)
+        }
+        val portrait = inst.context.assets.open("promo_coffee_portrait.jpg").use { it.readBytes() }
+        val landscape = inst.context.assets.open("promo_coffee.jpg").use { it.readBytes() }
+
+        // the coffee photo in the gallery, for the polaroid tab
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "promo_coffee.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/promo")
+        }
+        val uri = ctx.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)!!
+        ctx.contentResolver.openOutputStream(uri)!!.use { it.write(landscape) }
+
+        ActivityScenario.launch(MainActivity::class.java).use {
+            Thread.sleep(2500)
+            val w = dev.displayWidth
+            val h = dev.displayHeight
+
+            // 1. recipes: scroll the list, open one
+            record("recipes", 9)
+            dev.swipe(w / 2, (h * 0.78).toInt(), w / 2, (h * 0.42).toInt(), 60)
+            Thread.sleep(1300)
+            dev.swipe(w / 2, (h * 0.42).toInt(), w / 2, (h * 0.70).toInt(), 60)
+            Thread.sleep(1200)
+            val first = c.recipes.firstOrNull()?.name
+            if (first != null) dev.findObject(By.text(first))?.click()
+            Thread.sleep(5200)
+            dev.pressBack()
+            Thread.sleep(1200)
+
+            // 2. connect
+            dev.findObject(By.text("連線"))?.click()
+            Thread.sleep(1500)
+            record("connect", 5)
+            Thread.sleep(5200)
+
+            // 3. shoot: the coffee photo through different recipes, then the shutter
+            inst.runOnMainSync {
+                c.shoot.startDemo(portrait)
+                c.shoot.selectRecipe(c.recipes.firstOrNull()?.id)
+            }
+            dev.findObject(By.text("拍照"))?.click()
+            Thread.sleep(2500)
+            val strip = dev.findObject(By.text("不套用"))?.visibleBounds?.centerY() ?: (h * 0.72).toInt()
+            record("shoot", 14)
+            Thread.sleep(800)
+            repeat(4) {
+                dev.swipe((w * 0.68).toInt(), strip, (w * 0.40).toInt(), strip, 28)
+                Thread.sleep(1900)
+            }
+            inst.runOnMainSync { c.shoot.shutter() }
+            Thread.sleep(4500)
+
+            // 4. polaroid
+            inst.runOnMainSync { c.polaroid.addPhotos(listOf(uri), true) }
+            dev.findObject(By.text("拍立得"))?.click()
+            Thread.sleep(2500)
+            record("polaroid", 8)
+            Thread.sleep(1500)
+            for (f in listOf(Frame.Black, Frame.Tint, Frame.White)) {
+                inst.runOnMainSync { c.polaroid.setFrame(f) }
+                Thread.sleep(1700)
+            }
+            Thread.sleep(2000)
+
+            // 5. home of the app, for the ending
+            dev.findObject(By.text("食譜"))?.click()
+            Thread.sleep(1500)
+            record("home", 4)
+            Thread.sleep(4800)
+        }
+        sh("am broadcast -a com.android.systemui.demo -e command exit")
+    }
+}

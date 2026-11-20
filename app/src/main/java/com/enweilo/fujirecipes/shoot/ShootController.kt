@@ -356,8 +356,24 @@ class ShootController(
             capture?.targetRotation = value
         }
 
+    /** A still picture shown instead of the camera (for the promo video). */
+    var demoJpeg: ByteArray? = null
+        private set
+    private var demoBitmap: Bitmap? = null
+
+    fun startDemo(jpeg: ByteArray) {
+        demoJpeg = jpeg
+        demoBitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+        lenses = listOf(Lens(0.6f, null, 0.6f), Lens(1f, null, 1f), Lens(3f, null, 3f))
+        lensIndex = 1
+        zoomMin = 0.6f; zoomMax = 10f; zoom = 1f
+        cameraReady = true
+        bound?.second?.let { v -> demoBitmap?.let { v.showDemo(it) } }
+    }
+
     fun bind(owner: LifecycleOwner, view: LookPreview) {
         bound = owner to view
+        demoBitmap?.let { view.showDemo(it); cameraReady = true; return }
         val future = ProcessCameraProvider.getInstance(app)
         future.addListener({
             val p = try { future.get() } catch (_: Throwable) { toast("無法開啟相機"); return@addListener }
@@ -845,6 +861,7 @@ class ShootController(
     // ---------------- taking a picture ----------------
 
     fun shutter() {
+        demoJpeg?.let { if (!capturing) takeDemo(it); return }
         if (capturing || countdown > 0 || (capture == null && c2b == null) || !cameraReady) return
         if (timer > 0) {
             timerJob = scope.launch {
@@ -934,6 +951,32 @@ class ShootController(
             tele > 1.3f && r >= tele - 0.02f -> "長焦"
             else -> "主鏡頭"
         } + " %.1fx".format(r)
+    }
+
+    private fun takeDemo(jpeg: ByteArray) {
+        val recipe = currentRecipe()
+        val look = currentLook()
+        val ratioNow = ratio
+        capturing = true
+        shutterCount++
+        feedback.shutter()
+        val id = ++reviewSeq
+        if (reviewMode != 0) review = Review(id)
+        processing++
+        scope.launch {
+            delay(150)
+            capturing = false
+            if (reviewMode != 0) {
+                val q = withContext(gl) { runCatching { quickPreview(jpeg, look, ratioNow, 0) }.getOrNull() }
+                review?.let { if (it.id == id) review = it.copy(quick = q) }
+            }
+            val r = withContext(gl) { runCatching { develop(jpeg, 0, 0, 0, recipe, look, ratioNow, false, forceTurn = 0, lens = "主鏡頭 1.0x") } }
+            processing--
+            r.onSuccess { d ->
+                lastUri = d.uri; lastThumb = d.thumb
+                review?.let { if (it.id == id) review = it.copy(final = d.preview, uri = d.uri, info = d.info, busy = false) }
+            }
+        }
     }
 
     private fun takeHidden(b: Camera2Backend) {

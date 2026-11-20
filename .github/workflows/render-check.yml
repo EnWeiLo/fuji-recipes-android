@@ -52,7 +52,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: |
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.camera=1 2>&1 | tee build.log
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.camera=1 -Pandroid.testInstrumentationRunnerArguments.promo=1 2>&1 | tee build.log
             mkdir -p render
             adb pull /sdcard/Pictures/rendercheck/. render/ || true
 

@@ -101,6 +101,49 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
     /** The picture on screen right now (for cross-fades). */
     fun snapshot(): android.graphics.Bitmap? = runCatching { getBitmap(width / 2, height / 2) }.getOrNull()
 
+    // ---------------- demo picture (instead of the camera; used for the promo video) ----------------
+
+    @Volatile private var demo: android.graphics.Bitmap? = null
+    private var demoTex = 0
+    private var demoProg: LookProgram? = null
+    private var demoUploaded: android.graphics.Bitmap? = null
+
+    /** Shows [b] as if it were the camera picture (upright), with the look applied live. */
+    fun showDemo(b: android.graphics.Bitmap) {
+        demo = b
+        frame = minOf(b.width, b.height).toFloat() / maxOf(b.width, b.height)
+        updateCrop()
+        val fa = b.width.toFloat() / b.height
+        post { onFrameAspect?.invoke(fa) }
+        redraw()
+    }
+
+    private fun drawDemo(b: android.graphics.Bitmap): Boolean {
+        if (demoProg == null) demoProg = runCatching { LookProgram(external = false) }.getOrNull()
+        val p = demoProg ?: return false
+        if (demoTex == 0) {
+            val t = IntArray(1)
+            GLES30.glGenTextures(1, t, 0)
+            demoTex = t[0]
+        }
+        if (demoUploaded !== b) {
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, demoTex)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            android.opengl.GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, b, 0)
+            demoUploaded = b
+        }
+        if (lutDirty) { lutDirty = false; p.resetLut() }
+        val l = look
+        val hasLut = p.useLut(l.lutKey, store)
+        // bitmap rows run top-down; flip so the picture stands upright
+        val flip = floatArrayOf(1f, 0f, 0f, 0f, 0f, -1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 1f, 0f, 1f)
+        p.draw(demoTex, flip, LookProgram.IDENTITY3, LookProgram.FULL, LookProgram.FULL, viewH.toFloat() / viewW, l, hasLut, original)
+        return true
+    }
+
     fun reloadLut() {
         lutDirty = true
         redraw()
@@ -254,6 +297,17 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
     private fun draw() {
         if (window == EGL14.EGL_NO_SURFACE) return
         EGL14.eglMakeCurrent(display, window, window, eglContext)
+        val db = demo
+        if (db != null) {
+            GLES30.glViewport(0, 0, viewW, viewH)
+            GLES30.glClearColor(0f, 0f, 0f, 1f)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+            if (drawDemo(db)) {
+                EGL14.eglSwapBuffers(display, window)
+                if (!gotFrame) { gotFrame = true; post { onFirstFrame?.invoke() } }
+            }
+            return
+        }
         val st = camTexture ?: return
         if (frameReady) {
             try {
@@ -300,6 +354,11 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
         EGL14.eglMakeCurrent(display, window, window, eglContext)
         program?.release()
         program = null
+        demoProg?.release()
+        demoProg = null
+        if (demoTex != 0) GLES30.glDeleteTextures(1, intArrayOf(demoTex), 0)
+        demoTex = 0
+        demoUploaded = null
         camTexture?.release()
         camTexture = null
         if (oesTex != 0) GLES30.glDeleteTextures(1, intArrayOf(oesTex), 0)
