@@ -16,6 +16,7 @@ permissions:
 jobs:
   render:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -52,8 +53,9 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: |
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.camera=1 -Pandroid.testInstrumentationRunnerArguments.promo=1 2>&1 | tee build.log
+            timeout 1800 ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.camera=1 -Pandroid.testInstrumentationRunnerArguments.promo=1 2>&1 | tee build.log || true
             mkdir -p render
+            adb logcat -d -s PromoTest:* ShootTest:* AndroidRuntime:E TestRunner:* > render/logcat.txt || true
             adb pull /sdcard/Pictures/rendercheck/. render/ || true
 
       - name: Publish pictures

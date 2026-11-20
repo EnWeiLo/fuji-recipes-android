@@ -21,7 +21,12 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class PromoTest {
 
+    @get:org.junit.Rule
+    val timeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(300)
+
     private val inst = InstrumentationRegistry.getInstrumentation()
+
+    private fun step(text: String) = android.util.Log.i("PromoTest", text)
     private val dev = UiDevice.getInstance(inst)
 
     private fun sh(cmd: String) {
@@ -40,7 +45,8 @@ class PromoTest {
         )
         Thread {
             runCatching { android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd).readBytes() }
-        }.start()
+        }.apply { isDaemon = true }.start()
+        step("recording $name")
         Thread.sleep(700)
     }
 
@@ -61,11 +67,13 @@ class PromoTest {
         sh("am broadcast -a com.android.systemui.demo -e command network -e wifi show -e level 4 -e mobile show -e datatype none -e level 4")
         sh("am broadcast -a com.android.systemui.demo -e command notifications -e visible false")
 
+        step("start")
         val store = LutStore(ctx)
         if (store.installedFlog().size < 10) {
             val (url, _) = store.probeSize()
             store.download(url) { _, _ -> }
         }
+        step("luts ready")
         inst.runOnMainSync {
             c.changeAutoUpdate(false)
             c.shoot.refreshLuts()
@@ -88,6 +96,7 @@ class PromoTest {
             val w = dev.displayWidth
             val h = dev.displayHeight
 
+            step("1. recipes")
             // 1. recipes: scroll the list, open one
             record("recipes", 9)
             dev.swipe(w / 2, (h * 0.78).toInt(), w / 2, (h * 0.42).toInt(), 60)
@@ -100,12 +109,14 @@ class PromoTest {
             dev.pressBack()
             Thread.sleep(1200)
 
+            step("2. connect")
             // 2. connect
             dev.findObject(By.text("連線"))?.click()
             Thread.sleep(1500)
             record("connect", 5)
             Thread.sleep(5200)
 
+            step("3. shoot")
             // 3. shoot: the coffee photo through different recipes, then the shutter
             inst.runOnMainSync {
                 c.shoot.startDemo(portrait)
@@ -123,6 +134,7 @@ class PromoTest {
             inst.runOnMainSync { c.shoot.shutter() }
             Thread.sleep(4500)
 
+            step("4. polaroid")
             // 4. polaroid
             inst.runOnMainSync { c.polaroid.addPhotos(listOf(uri), true) }
             dev.findObject(By.text("拍立得"))?.click()
@@ -135,6 +147,7 @@ class PromoTest {
             }
             Thread.sleep(2000)
 
+            step("5. home")
             // 5. home of the app, for the ending
             dev.findObject(By.text("食譜"))?.click()
             Thread.sleep(1500)
@@ -142,5 +155,6 @@ class PromoTest {
             Thread.sleep(4800)
         }
         sh("am broadcast -a com.android.systemui.demo -e command exit")
+        step("done")
     }
 }
