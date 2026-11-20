@@ -1,0 +1,12 @@
+--------- beginning of main
+11-20 11:20:36.529  2451  2470 I TestRunner: run started: 1 tests
+11-20 11:20:36.529  2451  2470 I TestRunner: started: calib(com.enweilo.fujirecipes.CalibTest)
+11-20 11:20:43.838  2451  2470 I CalibTest: luts 10
+11-20 11:20:50.854  2451  2470 I CalibTest: before:  |  | 
+11-20 11:21:05.787  2451  2470 I CalibTest: calib: 預覽對齊 RAW：已校正 3 次（曝光 ×0.94，色彩 R0.94 G1.02 B1.03） count 3
+11-20 11:21:05.788  2451  2470 I CalibTest: curve 0.000 0.015 0.026 0.051 0.090 0.100 0.112 0.167 0.231 0.299 0.354 0.445 0.570 0.806 1.091 2.124
+11-20 11:21:05.791  2451  2470 I CalibTest: static 0.000 0.018 0.038 0.057 0.078 0.102 0.132 0.167 0.212 0.269 0.344 0.447 0.591 0.886 1.724 4.821
+11-20 11:21:17.077  2451  2470 I CalibTest: review: 校正測試 · RAW · 主鏡頭 1.0x · 1/222 · f/2.8 · ISO 100
+11-20 11:21:19.460  2451  2470 I CalibTest: done
+11-20 11:21:19.463  2451  2470 I TestRunner: finished: calib(com.enweilo.fujirecipes.CalibTest)
+11-20 11:21:20.964  2451  2470 I TestRunner: run finished: 1 tests, 0 failed, 0 ignored

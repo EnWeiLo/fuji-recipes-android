@@ -1,0 +1,8 @@
+ls: /sdcard/Pictures/rendercheck/: No such file or directory
+total 1668
+drwxrwx--x 2 shell shell    4096 2026-11-20 11:21 .
+drwxr-x--x 5 root  root     4096 2026-11-20 11:19 ..
+-rw-rw-r-- 1 shell shell  123030 2026-11-20 11:20 s_cal_0_start.png
+-rw-rw-r-- 1 shell shell  133452 2026-11-20 11:21 s_cal_1_preview.png
+-rw-rw-r-- 1 shell shell 1141460 2026-11-20 11:21 s_cal_2_review.png
+-rw-rw-rw- 1 shell shell  268374 2026-11-20 11:21 s_cal_3_photo.jpg

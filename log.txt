@@ -1,0 +1,42 @@
+test(AVD) - 14 Tests 0/1 completed. (0 skipped) (0 failed)
+BUILD SUCCESSFUL in 2m 9s
+> Task :app:processDebugAndroidTestManifest
+> Task :app:mergeExtDexDebugAndroidTest
+> Task :app:mergeDebugAndroidTestJniLibFolders
+> Task :app:mergeDebugAndroidTestNativeLibs NO-SOURCE
+> Task :app:stripDebugAndroidTestDebugSymbols NO-SOURCE
+> Task :app:validateSigningDebugAndroidTest
+> Task :app:writeDebugAndroidTestSigningConfigVersions
+> Task :app:processDebugAndroidTestResources
+> Task :app:compileDebugJavaWithJavac NO-SOURCE
+> Task :app:processDebugJavaRes
+> Task :app:bundleDebugClassesToCompileJar
+> Task :app:mergeDebugJavaResource
+
+> Task :app:compileDebugAndroidTestKotlin
+w: file:///home/runner/work/fuji-recipes-android/fuji-recipes-android/app/src/androidTest/java/com/enweilo/fujirecipes/RingTest.kt:41:115 'val defaultDisplay: Display!' is deprecated. Deprecated in Java.
+w: file:///home/runner/work/fuji-recipes-android/fuji-recipes-android/app/src/androidTest/java/com/enweilo/fujirecipes/RingTest.kt:41:130 'fun getRealSize(p0: Point!): Unit' is deprecated. Deprecated in Java.
+
+> Task :app:dexBuilderDebug
+> Task :app:compileDebugAndroidTestJavaWithJavac NO-SOURCE
+> Task :app:processDebugAndroidTestJavaRes
+> Task :app:mergeDebugAndroidTestJavaResource
+> Task :app:dexBuilderDebugAndroidTest
+> Task :app:mergeProjectDexDebug
+> Task :app:mergeProjectDexDebugAndroidTest
+> Task :app:packageDebugAndroidTest
+> Task :app:createDebugAndroidTestApkListingFileRedirect
+> Task :app:packageDebug
+> Task :app:createDebugApkListingFileRedirect
+Starting 1 tests on test(AVD) - 14
+test(AVD) - 14 Tests 0/1 completed. (0 skipped) (0 failed)
+> Task :app:connectedDebugAndroidTest
+
+Finished 1 tests on test(AVD) - 14
+gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__reactivecircus_android-emulator-runner-1795173557779.json
+
+[Incubating] Problems report is available at: file:///home/runner/work/fuji-recipes-android/fuji-recipes-android/build/reports/problems/problems-report.html
+
+BUILD SUCCESSFUL in 2m 9s
+68 actionable tasks: 56 executed, 12 from cache
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.7.1/userguide/configuration_cache_enabling.html
