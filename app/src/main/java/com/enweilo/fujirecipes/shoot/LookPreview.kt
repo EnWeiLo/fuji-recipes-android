@@ -144,6 +144,50 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
         return true
     }
 
+    /** The camera's own picture (no recipe), small, for [ToneCalib]. [cb] runs on the GL thread. */
+    @Volatile private var grab: ((IntArray, Int, Int) -> Unit)? = null
+    private var grabFb = 0
+    private var grabTex = 0
+    fun grabSource(cb: (IntArray, Int, Int) -> Unit) {
+        grab = cb
+    }
+
+    private fun doGrab(p: LookProgram) {
+        val cb = grab ?: return
+        grab = null
+        val gw = 128
+        val gh = 96
+        if (grabFb == 0) {
+            val t = IntArray(1)
+            GLES30.glGenTextures(1, t, 0)
+            grabTex = t[0]
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, grabTex)
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, gw, gh, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
+            GLES30.glGenFramebuffers(1, t, 0)
+            grabFb = t[0]
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, grabFb)
+            GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, grabTex, 0)
+        }
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, grabFb)
+        GLES30.glViewport(0, 0, gw, gh)
+        p.draw(oesTex, texMat, LookProgram.IDENTITY3, LookProgram.FULL, LookProgram.FULL, 1f, Look.NONE, false, true)
+        val buf = java.nio.ByteBuffer.allocateDirect(gw * gh * 4).order(java.nio.ByteOrder.nativeOrder())
+        GLES30.glReadPixels(0, 0, gw, gh, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buf)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glViewport(0, 0, viewW, viewH)
+        val out = IntArray(gw * gh)
+        for (i in 0 until gw * gh) {
+            val r = buf.get(i * 4).toInt() and 255
+            val g = buf.get(i * 4 + 1).toInt() and 255
+            val b = buf.get(i * 4 + 2).toInt() and 255
+            out[i] = (255 shl 24) or (r shl 16) or (g shl 8) or b
+        }
+        cb(out, gw, gh)
+    }
+
+    /** Draw again (the shared curve changed). */
+    fun refresh() = redraw()
+
     fun reloadLut() {
         lutDirty = true
         redraw()
@@ -334,6 +378,7 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
             )
         }
         EGL14.eglSwapBuffers(display, window)
+        if (frameReady && p != null && grab != null) runCatching { doGrab(p) }
         if (frameReady && !gotFrame) {
             gotFrame = true
             post { onFirstFrame?.invoke() }
@@ -363,6 +408,9 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
         camTexture = null
         if (oesTex != 0) GLES30.glDeleteTextures(1, intArrayOf(oesTex), 0)
         oesTex = 0
+        if (grabFb != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(grabFb), 0)
+        if (grabTex != 0) GLES30.glDeleteTextures(1, intArrayOf(grabTex), 0)
+        grabFb = 0; grabTex = 0
         EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
         EGL14.eglDestroySurface(display, window)
         EGL14.eglDestroyContext(display, eglContext)

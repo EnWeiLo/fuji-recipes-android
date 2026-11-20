@@ -21,6 +21,14 @@ class LookProgram(private val external: Boolean) {
 
     private var lutTex = 0
     private var lutKey: String? = null
+    /** true when the loaded LUT is Fujifilm's own F-Log2 one (scene light in), false for the baked phone LUT */
+    private var lutFlog = false
+    private var lutAskedFlog = false
+    private var curveTex = 0
+    private var curveVersion = -1
+    private var staticCurve: FloatArray? = null
+    /** the curve and colour fix in use, for drawing */
+    private var flogReady = false
 
     init {
         val vs = compile(GLES30.GL_VERTEX_SHADER, VERTEX)
@@ -39,11 +47,18 @@ class LookProgram(private val external: Boolean) {
 
     private fun u(name: String): Int = loc.getOrPut(name) { GLES30.glGetUniformLocation(program, name) }
 
-    /** Makes the 3D texture hold [key]'s LUT. Returns false when that LUT is not installed. */
+    /**
+     * Makes the 3D texture hold [key]'s LUT. Returns false when that LUT is not installed. Prefers Fujifilm's
+     * F-Log2 LUT with the scene-light path (the same one RAW photos take); falls back to the baked phone LUT.
+     */
     fun useLut(key: String?, store: LutStore): Boolean {
         if (key == null) return false
-        if (key == lutKey && lutTex != 0) return true
-        val data = store.load(key) ?: return false
+        val wantFlog = syncCurve(store)
+        if (key == lutKey && lutTex != 0 && lutAskedFlog == wantFlog) return true
+        val flogData = if (wantFlog) store.loadFlog(key) else null
+        val data = flogData ?: store.load(key) ?: return false
+        lutFlog = flogData != null
+        lutAskedFlog = wantFlog
         if (lutTex == 0) {
             val t = IntArray(1)
             GLES30.glGenTextures(1, t, 0)
@@ -67,6 +82,36 @@ class LookProgram(private val external: Boolean) {
     /** Forget the loaded LUT (after a new download). */
     fun resetLut() {
         lutKey = null
+        staticCurve = null
+        curveVersion = -1
+    }
+
+    /** Keeps the curve texture in step with [ToneCalib]. Returns true when the scene-light path can be used. */
+    private fun syncCurve(store: LutStore): Boolean {
+        if (staticCurve == null) staticCurve = store.phoneCurve()
+        val c = ToneCalib.curve ?: staticCurve ?: run { flogReady = false; return false }
+        val v = ToneCalib.version
+        if (curveTex == 0) {
+            val t = IntArray(1)
+            GLES30.glGenTextures(1, t, 0)
+            curveTex = t[0]
+            curveVersion = -1
+        }
+        if (v != curveVersion) {
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTex)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            val b = ByteBuffer.allocateDirect(256 * 2).order(ByteOrder.nativeOrder())
+            for (x in c) b.putShort(android.util.Half.toHalf(x))
+            b.position(0)
+            GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R16F, 256, 1, 0, GLES30.GL_RED, GLES30.GL_HALF_FLOAT, b)
+            curveVersion = v
+        }
+        flogReady = true
+        return true
     }
 
     /**
@@ -89,6 +134,14 @@ class LookProgram(private val external: Boolean) {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, if (hasLut) lutTex else 0)
         GLES30.glUniform1i(u("uLut"), 1)
+        val flog = hasLut && lutFlog && flogReady
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (flog) curveTex else 0)
+        GLES30.glUniform1i(u("uCurve"), 2)
+        GLES30.glUniform1f(u("uFlog"), if (flog) 1f else 0f)
+        GLES30.glUniform3fv(u("uFix"), 1, ToneCalib.fix, 0)
+        GLES30.glUniform3fv(u("uWb"), 1, look.wbAdapt, 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
 
         GLES30.glUniformMatrix4fv(u("uTexMat"), 1, false, texMat, 0)
         GLES30.glUniformMatrix3fv(u("uRot"), 1, false, rot, 0)
@@ -122,6 +175,7 @@ class LookProgram(private val external: Boolean) {
 
     fun release() {
         if (lutTex != 0) GLES30.glDeleteTextures(1, intArrayOf(lutTex), 0)
+        if (curveTex != 0) GLES30.glDeleteTextures(1, intArrayOf(curveTex), 0)
         GLES30.glDeleteProgram(program)
     }
 
@@ -188,6 +242,9 @@ void main() {
         private const val FRAG_BODY = """
 precision highp sampler3D;
 uniform sampler3D uLut;
+uniform sampler2D uCurve;
+uniform float uFlog;
+uniform vec3 uFix, uWb;
 uniform float uAspect, uOrig, uHasLut, uDr, uPreMono, uPostMono, uContrast, uWarmHi, uSat, uHi, uSh;
 uniform float uChrome, uChromeBlue, uGrain, uCells;
 uniform vec3 uGain, uMonoW, uTint;
@@ -199,6 +256,10 @@ const vec3 W = vec3(0.2126, 0.7152, 0.0722);
 
 vec3 dec(vec3 v) { return mix(v / 12.92, pow((v + 0.055) / 1.055, vec3(2.4)), step(0.04045, v)); }
 vec3 enc(vec3 l) { l = max(l, 0.0); return mix(l * 12.92, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, l)); }
+
+float flog2(float x) {
+    return x >= 0.000889 ? 0.245281 * log(5.555556 * x + 0.064829) / log(10.0) + 0.384316 : 8.799461 * x + 0.092864;
+}
 
 float hash(vec2 p) {
     p = fract(p * vec2(0.1031, 0.1030));
@@ -216,20 +277,40 @@ void main() {
     vec3 src = texture(uSrc, vSrc).rgb;
     if (uOrig > 0.5) { o = vec4(src, 1.0); return; }
 
-    // white balance shift, in linear light
-    vec3 lin = dec(src) * uGain;
-    // dynamic range 200 / 400: hold the highlights back a little
-    float y = dot(lin, W);
-    if (uDr > 0.0 && y > 0.0) {
-        float yc = y / (1.0 + uDr * 0.22 * max(y - 0.18, 0.0));
-        lin *= yc / y;
-    }
-    if (uPreMono > 0.5) lin = vec3(dot(lin, uMonoW));
-    vec3 d = clamp(enc(lin), 0.0, 1.0);
+    vec3 c;
+    if (uFlog > 0.5) {
+        // the RAW photo's path: back to scene light, then exactly what RAW does
+        vec3 lin = dec(src);
+        float y = dot(lin, W);
+        float yd = clamp(enc(vec3(y)).g, 0.0, 1.0);
+        float ys = texture(uCurve, vec2(yd * (255.0 / 256.0) + 0.5 / 256.0, 0.5)).r;
+        vec3 scene = y > 1e-6 ? lin * (ys / y) : vec3(0.0);
+        scene *= uFix * uWb * uGain;
+        float ysc = dot(scene, W);
+        if (uDr > 0.0 && ysc > 0.18) {
+            float yc = 0.18 * pow(ysc / 0.18, 1.0 / (1.0 + 0.16 * uDr));
+            scene *= yc / ysc;
+        }
+        if (uPreMono > 0.5) scene = vec3(dot(scene, uMonoW));
+        vec3 fg = mat3(0.6274, 0.0691, 0.0164, 0.3293, 0.9195, 0.0880, 0.0433, 0.0114, 0.8956) * max(scene, 0.0);
+        vec3 code = vec3(flog2(fg.r), flog2(fg.g), flog2(fg.b));
+        c = texture(uLut, clamp(code, 0.0, 1.0) * (32.0 / 33.0) + 0.5 / 33.0).rgb;
+    } else {
+        // white balance shift, in linear light
+        vec3 lin = dec(src) * uGain;
+        // dynamic range 200 / 400: hold the highlights back a little
+        float y = dot(lin, W);
+        if (uDr > 0.0 && y > 0.0) {
+            float yc = y / (1.0 + uDr * 0.22 * max(y - 0.18, 0.0));
+            lin *= yc / y;
+        }
+        if (uPreMono > 0.5) lin = vec3(dot(lin, uMonoW));
+        vec3 d = clamp(enc(lin), 0.0, 1.0);
 
-    // film simulation
-    vec3 c = d;
-    if (uHasLut > 0.5) c = texture(uLut, d * (32.0 / 33.0) + 0.5 / 33.0).rgb;
+        // film simulation
+        c = d;
+        if (uHasLut > 0.5) c = texture(uLut, d * (32.0 / 33.0) + 0.5 / 33.0).rgb;
+    }
 
     if (uContrast != 0.0) c = clamp(mix(c, c * c * (3.0 - 2.0 * c), uContrast), 0.0, 1.0);
 

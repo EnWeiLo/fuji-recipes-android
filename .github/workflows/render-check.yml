@@ -53,7 +53,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: |
-            timeout 1800 ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.camera=1 -Pandroid.testInstrumentationRunnerArguments.promo=1 -Pandroid.testInstrumentationRunnerArguments.class=com.enweilo.fujirecipes.RingTest 2>&1 | tee build.log || true
+            timeout 1800 ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.camera=1 -Pandroid.testInstrumentationRunnerArguments.promo=1 -Pandroid.testInstrumentationRunnerArguments.class=com.enweilo.fujirecipes.CalibTest 2>&1 | tee build.log || true
             mkdir -p render
             adb logcat -d -s PromoTest:* ShootTest:* AndroidRuntime:E TestRunner:* > render/logcat.txt || true
             adb shell ls -la /sdcard/Pictures/rendercheck/ /data/local/tmp/ > render/ls.txt 2>&1 || true; for f in $(adb shell ls /data/local/tmp/ | tr -d "\r" | grep -E "^(s_|rec_)"); do adb pull /data/local/tmp/$f render/ || true; done

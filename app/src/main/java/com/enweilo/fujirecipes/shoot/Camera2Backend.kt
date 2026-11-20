@@ -287,9 +287,100 @@ class Camera2Backend(private val context: Context, val id: String) {
         }
     }
 
+    @Volatile private var probing = false
+
+    private fun frameOf(res: TotalCaptureResult, w: Int, h: Int, pixels: java.nio.ByteBuffer): RawFrame {
+        val pid = if (Build.VERSION.SDK_INT >= 29) res.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) else null
+        val pc = pid?.let { runCatching { cm.getCameraCharacteristics(it) }.getOrNull() }
+        val pr = if (pid != null && Build.VERSION.SDK_INT >= 31) runCatching { res.physicalCameraTotalResults[pid] }.getOrNull()
+        else if (pid != null) @Suppress("DEPRECATION") runCatching { res.physicalCameraResults[pid] }.getOrNull() else null
+        return RawFrame(w, h, pixels, res, pc ?: ch, pr, pid)
+    }
+
+    /**
+     * Grabs one RAW frame alongside the live preview and keeps only a grid of 2×2 cells from it, for matching
+     * the viewfinder to RAW. [onProbe] runs on the camera thread; null when RAW is not running or busy.
+     */
+    fun probeRaw(onProbe: (RawProbe?) -> Unit) {
+        handler.post {
+            val s = session
+            val d = device
+            val rr = rawReader
+            val ps = previewSurface
+            if (!rawActive || s == null || d == null || rr == null || ps == null || probing) { onProbe(null); return@post }
+            probing = true
+            val gw = 160
+            val gh = 120
+            var cells: ShortArray? = null
+            var xs: IntArray? = null
+            var ys: IntArray? = null
+            var w = 0
+            var h = 0
+            var total: TotalCaptureResult? = null
+            var done = false
+            fun finish(ok: Boolean) {
+                if (done) return
+                if (ok && (cells == null || total == null)) return
+                done = true
+                probing = false
+                rr.setOnImageAvailableListener(null, null)
+                if (!ok) { onProbe(null); return }
+                onProbe(RawProbe(frameOf(total!!, w, h, java.nio.ByteBuffer.allocate(0)), gw, gh, xs!!, ys!!, cells!!))
+            }
+            handler.postDelayed({ finish(false) }, 1500)
+            rr.setOnImageAvailableListener({ rd ->
+                val img = runCatching { rd.acquireNextImage() }.getOrNull()
+                if (img == null) { finish(false); return@setOnImageAvailableListener }
+                runCatching {
+                    val plane = img.planes[0]
+                    val buf = plane.buffer.order(java.nio.ByteOrder.nativeOrder())
+                    w = img.width; h = img.height
+                    val cx = IntArray(gw * gh)
+                    val cy = IntArray(gw * gh)
+                    val out = ShortArray(gw * gh * 4)
+                    for (j in 0 until gh) for (i in 0 until gw) {
+                        val x = (((i + 0.5f) * w / gw).toInt() and 1.inv()).coerceAtMost(w - 2)
+                        val y = (((j + 0.5f) * h / gh).toInt() and 1.inv()).coerceAtMost(h - 2)
+                        val k = j * gw + i
+                        cx[k] = x; cy[k] = y
+                        val o0 = y * plane.rowStride + x * 2
+                        val o1 = (y + 1) * plane.rowStride + x * 2
+                        out[k * 4] = buf.getShort(o0)
+                        out[k * 4 + 1] = buf.getShort(o0 + 2)
+                        out[k * 4 + 2] = buf.getShort(o1)
+                        out[k * 4 + 3] = buf.getShort(o1 + 2)
+                    }
+                    cells = out; xs = cx; ys = cy
+                }
+                img.close()
+                if (cells == null) finish(false) else finish(true)
+            }, handler)
+            runCatching {
+                val b = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                b.addTarget(ps)
+                b.addTarget(rr.surface)
+                b.common(false)
+                if (CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_ON in shadingModes) {
+                    b.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_ON)
+                }
+                s.capture(b.build(), object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureCompleted(ss: CameraCaptureSession, req: CaptureRequest, result: TotalCaptureResult) {
+                        total = result
+                        finish(true)
+                    }
+                    override fun onCaptureFailed(ss: CameraCaptureSession, req: CaptureRequest, f: android.hardware.camera2.CaptureFailure) {
+                        finish(false)
+                    }
+                }, handler)
+            }.onFailure { finish(false) }
+        }
+    }
+
     /** Takes a picture. [onShot] gets it on the main thread (null on failure). */
     fun capture(onShot: (Shot?) -> Unit) {
         handler.post {
+            // a background RAW probe holds the RAW reader for a moment
+            if (probing) { handler.postDelayed({ capture(onShot) }, 40); return@post }
             val s = session
             val d = device
             val r = reader
@@ -310,13 +401,7 @@ class Camera2Backend(private val context: Context, val id: String) {
                 if (rr != null && (rawBuf == null || total == null)) return
                 delivered = true
                 val res = total
-                val frame = if (rr != null && res != null && rawBuf != null) {
-                    val pid = if (Build.VERSION.SDK_INT >= 29) res.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) else null
-                    val pc = pid?.let { runCatching { cm.getCameraCharacteristics(it) }.getOrNull() }
-                    val pr = if (pid != null && Build.VERSION.SDK_INT >= 31) runCatching { res.physicalCameraTotalResults[pid] }.getOrNull()
-                    else if (pid != null) @Suppress("DEPRECATION") runCatching { res.physicalCameraResults[pid] }.getOrNull() else null
-                    RawFrame(rawW, rawH, rawBuf!!, res, pc ?: ch, pr, pid)
-                } else null
+                val frame = if (rr != null && res != null && rawBuf != null) frameOf(res, rawW, rawH, rawBuf!!) else null
                 main.post { onShot(Shot(j, frame)) }
             }
             // stop waiting after a while; deliver what came (JPEG alone is fine)

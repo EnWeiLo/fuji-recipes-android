@@ -205,6 +205,7 @@ class ShootController(
     fun changeRaw(on: Boolean) {
         rawEnabled = on
         prefs.edit().putBoolean("raw", on).apply()
+        if (!on) { ToneCalib.reset(); calibReport = "" }
         bound?.let { start(it.first, it.second) }
     }
 
@@ -230,6 +231,70 @@ class ShootController(
     /** Lines about RAW for 設定 → 相機資訊. */
     var rawReport by mutableStateOf("")
         private set
+    /** How the viewfinder is being matched to RAW, for 設定 → 相機資訊. */
+    var calibReport by mutableStateOf("")
+        private set
+
+    // ---------------- matching the viewfinder to RAW ----------------
+
+    private val calibExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private var calibBusy = false
+
+    private val calibTick = Runnable { runCalib() }
+
+    private fun scheduleCalib(delay: Long = 2500L) {
+        mainHandler.removeCallbacks(calibTick)
+        mainHandler.postDelayed(calibTick, delay)
+    }
+
+    /**
+     * Every few seconds while RAW is on: a small RAW frame and the matching viewfinder picture are compared and
+     * the viewfinder's curve and colour are adjusted, so it shows what the RAW photo will look like.
+     */
+    private fun runCalib() {
+        val b = c2b ?: return
+        val view = bound?.second ?: return
+        if (calibBusy) return
+        if (!cameraReady || !rawEnabled || !b.rawActive || demoJpeg != null || capturing || useFront) {
+            scheduleCalib(); return
+        }
+        val static = luts.phoneCurve()
+        if (static == null || luts.installedFlog().isEmpty()) { scheduleCalib(5000); return }
+        calibBusy = true
+        val zoomNow = zoom
+        val separate = plan?.mode == LensScout.Mode.Separate
+        val mainEq = plan?.mainEq ?: 0f
+        b.probeRaw { probe ->
+            if (probe == null || c2b !== b) {
+                mainHandler.post { calibBusy = false; if (c2b === b) scheduleCalib() }
+                return@probeRaw
+            }
+            view.grabSource { px, w, h ->
+                calibExec.execute {
+                    val fit = runCatching {
+                        val m = rawDev.meta(probe.frame) ?: return@runCatching null
+                        val f = probe.frame
+                        val native = if (!separate && f.physicalId != null && mainEq > 0f) {
+                            (Camera2Backend.equivalent(f.chars) ?: mainEq) / mainEq
+                        } else 1f
+                        PreviewFit.fit(probe, m.black, m.white, m.gains, m.ccm, m.cfaRed, m.shading, px, w, h, zoomNow / native, static)
+                    }.onFailure { android.util.Log.w("ToneCalib", "fit", it) }.getOrNull()
+                    mainHandler.post {
+                        calibBusy = false
+                        if (c2b !== b) return@post
+                        if (fit != null) {
+                            ToneCalib.update(fit.curve, fit.fix, fit.scale)
+                            val fx = ToneCalib.fix
+                            calibReport = "預覽對齊 RAW：已校正 ${ToneCalib.count} 次（曝光 ×${"%.2f".format(fit.scale)}，" +
+                                "色彩 R${"%.2f".format(fx[0])} G${"%.2f".format(fx[1])} B${"%.2f".format(fx[2])}）"
+                            view.refresh()
+                        }
+                        scheduleCalib()
+                    }
+                }
+            }
+        }
+    }
 
     fun deleteLast(uri: Uri) {
         runCatching { app.contentResolver.delete(uri, null, null) }
@@ -537,6 +602,9 @@ class ShootController(
                 if (ok) {
                     usingHidden = true
                     cameraReady = true
+                    ToneCalib.reset()
+                    calibReport = if (b.rawActive) "預覽對齊 RAW：準備中" else ""
+                    scheduleCalib(1200)
                     val rs = b.rawSize
                     rawReport = when {
                         rs == null -> "RAW：相機 $id 沒有開放 RAW 給 App"
@@ -718,6 +786,8 @@ class ShootController(
             }
         }
         camera = cam
+        ToneCalib.reset()
+        calibReport = ""
         capture = ic
         preview = pv
         cameraReady = true

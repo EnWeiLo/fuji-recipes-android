@@ -1342,6 +1342,7 @@ fun ShootSettings(c: AppController) {
             }
             if (s.lensMode.isNotEmpty()) Txt(s.lensMode, 13, FontWeight.Medium)
             if (s.rawReport.isNotEmpty()) Txt(s.rawReport, 13, FontWeight.Medium)
+            if (s.calibReport.isNotEmpty()) Txt(s.calibReport, 12, color = p.sub)
             if (s.scanning) Txt("正在偵測鏡頭…", 12, color = p.sub)
             Spacer(Modifier.height(4.dp))
             SoftButton("重新偵測鏡頭", { s.rescanLenses() })

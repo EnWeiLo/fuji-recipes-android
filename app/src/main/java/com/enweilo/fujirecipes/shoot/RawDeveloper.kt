@@ -94,7 +94,7 @@ class RawDeveloper(private val store: LutStore) {
 
     // ---------------- metadata ----------------
 
-    private class Meta(
+    class Meta(
         val cfaRed: IntArray, // x, y of the red pixel in the 2×2 pattern
         val black: FloatArray, // per position (0,0) (1,0) (0,1) (1,1)
         val white: Float,
@@ -103,7 +103,7 @@ class RawDeveloper(private val store: LutStore) {
         val shading: android.hardware.camera2.params.LensShadingMap?,
     )
 
-    private fun meta(f: Camera2Backend.RawFrame): Meta? {
+    fun meta(f: Camera2Backend.RawFrame): Meta? {
         fun <T> get(k: CaptureResult.Key<T>): T? = f.physicalResult?.get(k) ?: f.result.get(k)
         val ch = f.chars
         val cfa = ch.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: 0

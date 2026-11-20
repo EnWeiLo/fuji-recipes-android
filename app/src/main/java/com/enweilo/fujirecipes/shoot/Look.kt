@@ -32,6 +32,8 @@ data class Look(
     val sharp: Float = 0f,
     val nr: Float = 0f,
     val clarity: Float = 0f,
+    /** colour temperature recipes: turns the camera's nearest white balance preset into the asked Kelvin */
+    val wbAdapt: FloatArray = floatArrayOf(1f, 1f, 1f),
 ) {
     companion object {
         val LUMA = floatArrayOf(0.2126f, 0.7152f, 0.0722f)
@@ -127,7 +129,22 @@ data class Look(
                 sharp = num(r.sharpness),
                 nr = num(r.nr),
                 clarity = num(r.clarity),
+                wbAdapt = kelvinAdapt(r),
             )
+        }
+
+        /** Same as the RAW path: the camera runs the preset nearest the recipe's Kelvin, the rest is done in light. */
+        fun kelvinAdapt(r: Recipe): FloatArray {
+            if (r.wb != "色溫") return floatArrayOf(1f, 1f, 1f)
+            val k = r.kelvin.filter { it.isDigit() }.toFloatOrNull() ?: return floatArrayOf(1f, 1f, 1f)
+            val from = when {
+                k < 3500 -> 2850f
+                k < 4600 -> 4200f
+                k < 5900 -> 5500f
+                k < 7000 -> 6500f
+                else -> 7500f
+            }
+            return RawDeveloper.adapt(from, k)
         }
 
         fun num(text: String): Float = text.replace("+", "").replace("＋", "").trim().toFloatOrNull() ?: 0f
