@@ -9,19 +9,28 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.view.OrientationEventListener
-import android.view.Surface
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -29,6 +38,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.snapping.SnapPosition
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.Arrangement
@@ -54,8 +64,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,39 +76,87 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.enweilo.fujirecipes.AppController
+import com.enweilo.fujirecipes.Tab
+import com.enweilo.fujirecipes.data.Recipe
 import com.enweilo.fujirecipes.data.Tables
 import com.enweilo.fujirecipes.shoot.FlashMode
 import com.enweilo.fujirecipes.shoot.Look
 import com.enweilo.fujirecipes.shoot.LookPreview
 import com.enweilo.fujirecipes.shoot.LutStore
-import com.enweilo.fujirecipes.shoot.Ratio
+import com.enweilo.fujirecipes.shoot.ShootController
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.floor
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 private val Ink = Color(0xFF0A0A0B)
 private val OnInk = Color(0xFFF4F1EC)
 private val Dim = Color(0x99F4F1EC)
+private val Focus = Color(0xFFFFD54A)
+private val FocusOk = Color(0xFF5BE08A)
+
+private val Bouncy = spring<Float>(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow)
+
+/** Turns its content upright for the way the phone is held, swapping width and height when sideways. */
+private fun Modifier.turned(quarter: Int, angle: () -> Float): Modifier = this.layout { m, c ->
+    val swap = quarter % 180 != 0
+    val p = m.measure(if (swap) Constraints(c.minHeight, c.maxHeight, c.minWidth, c.maxWidth) else c)
+    val w = if (swap) p.height else p.width
+    val h = if (swap) p.width else p.height
+    layout(w, h) { p.placeWithLayer((w - p.width) / 2, (h - p.height) / 2) { rotationZ = angle() } }
+}
+
+/** Press-down shrink with a spring back, plus a tap. */
+@Composable
+private fun Modifier.press(enabled: Boolean = true, to: Float = 0.86f, onClick: () -> Unit): Modifier {
+    var down by remember { mutableStateOf(false) }
+    val k by animateFloatAsState(if (down) to else 1f, Bouncy, label = "press")
+    val click by rememberUpdatedState(onClick)
+    return this
+        .graphicsLayer { scaleX = k; scaleY = k }
+        .pointerInput(enabled) {
+            if (!enabled) return@pointerInput
+            detectTapGestures(
+                onPress = {
+                    down = true
+                    tryAwaitRelease()
+                    down = false
+                },
+                onTap = { click() },
+            )
+        }
+}
 
 /** The 拍照 tab: a viewfinder that already shows the chosen recipe. */
 @Composable
@@ -109,19 +169,13 @@ fun ShootTab(c: AppController, active: Boolean) {
     val askCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
     LaunchedEffect(active) { if (active) s.refreshLuts() }
 
-    // Hold the screen upright while shooting; the photo still comes out landscape when the phone is turned.
+    // The screen stays upright while shooting; labels turn instead, and the photo follows the phone.
     val activity = context as? ComponentActivity
     DisposableEffect(active) {
         if (active) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         val listener = object : OrientationEventListener(context) {
             override fun onOrientationChanged(o: Int) {
-                if (o == ORIENTATION_UNKNOWN) return
-                s.targetRotation = when (o) {
-                    in 45..134 -> Surface.ROTATION_270
-                    in 135..224 -> Surface.ROTATION_180
-                    in 225..314 -> Surface.ROTATION_90
-                    else -> Surface.ROTATION_0
-                }
+                if (o != ORIENTATION_UNKNOWN) s.onOrientation(o)
             }
         }
         if (active) listener.enable()
@@ -130,53 +184,84 @@ fun ShootTab(c: AppController, active: Boolean) {
             if (active) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
+    val turn by animateFloatAsState(s.uiTurn.toFloat(), spring(dampingRatio = 0.7f, stiffness = 260f), label = "turn")
+    val ui = Turn(s.uiTurn) { turn }
 
-    Column(Modifier.fillMaxSize().background(Ink)) {
-        TopControls(c)
-        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            if (!granted) {
-                PermissionAsk { askCamera.launch(Manifest.permission.CAMERA) }
-            } else {
-                Viewfinder(c, active)
+    var finder by remember { mutableStateOf(Rect.Zero) }
+    var thumbBox by remember { mutableStateOf(Rect.Zero) }
+
+    Box(Modifier.fillMaxSize().background(Ink)) {
+        Column(Modifier.fillMaxSize()) {
+            TopControls(c, ui)
+            Box(
+                Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { finder = it.boundsInRoot() },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (!granted) {
+                    PermissionAsk { askCamera.launch(Manifest.permission.CAMERA) }
+                } else {
+                    Viewfinder(c, active, ui)
+                }
             }
+            RecipeStrip(c)
+            BottomControls(c, ui) { thumbBox = it }
+            // room for the tab bar
+            Spacer(Modifier.navigationBarsPadding().height(94.dp))
         }
-        RecipeStrip(c)
-        BottomControls(c)
-        // room for the tab bar
-        Spacer(Modifier.navigationBarsPadding().height(94.dp))
+        ThumbFlight(s, finder, thumbBox)
     }
 }
+
+/** Which way labels face: the target quarter turn and the animated angle. */
+private class Turn(val quarter: Int, val angle: () -> Float)
 
 // ---------------- top row ----------------
 
 @Composable
-private fun TopControls(c: AppController) {
+private fun TopControls(c: AppController, ui: Turn) {
     val s = c.shoot
     Row(
-        Modifier.fillMaxWidth().padding(top = topInset() + 6.dp, start = 12.dp, end = 12.dp, bottom = 6.dp).height(44.dp),
+        Modifier.fillMaxWidth().padding(top = topInset() + 6.dp, start = 12.dp, end = 12.dp, bottom = 6.dp).height(48.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        TopButton(if (s.flash == FlashMode.Off) Glyph.FlashOff else Glyph.Flash, s.flash.label, s.flash != FlashMode.Off) { s.nextFlash() }
-        TopButton(Glyph.Timer, if (s.timer == 0) "關" else "${s.timer}s", s.timer > 0) { s.nextTimer() }
+        TopButton(if (s.flash == FlashMode.Off) Glyph.FlashOff else Glyph.Flash, s.flash.label, s.flash != FlashMode.Off, ui) {
+            s.nextFlash(); s.feedback.click()
+        }
+        TopButton(Glyph.Timer, if (s.timer == 0) "關" else "${s.timer}s", s.timer > 0, ui) { s.nextTimer(); s.feedback.click() }
         Box(
-            Modifier.height(34.dp).clip(CircleShape).border(1.2.dp, Dim, CircleShape).tap { s.nextRatio() }.padding(horizontal = 14.dp),
+            Modifier.size(52.dp).press { s.nextRatio(); s.feedback.click() },
             contentAlignment = Alignment.Center,
-        ) { Txt(s.ratio.label, 14, FontWeight.SemiBold, OnInk) }
-        TopButton(Glyph.Grid, "格線", s.grid) { s.toggleGrid() }
-        TopButton(Glyph.Level, "水平", s.level) { s.toggleLevel() }
+        ) {
+            Box(
+                Modifier.graphicsLayer { rotationZ = ui.angle() }.height(30.dp).clip(CircleShape).border(1.2.dp, Dim, CircleShape)
+                    .padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                AnimatedContent(s.ratio.label, transitionSpec = { flip() }, label = "ratio") { Txt(it, 13, FontWeight.SemiBold, OnInk) }
+            }
+        }
+        TopButton(Glyph.Grid, "格線", s.grid, ui) { s.toggleGrid(); s.feedback.click() }
+        TopButton(Glyph.Level, "水平", s.level, ui) { s.toggleLevel(); s.feedback.click() }
     }
 }
 
+private fun flip() = (fadeIn(tween(160)) + scaleIn(initialScale = 0.6f, animationSpec = tween(220))) togetherWith
+    (fadeOut(tween(120)) + scaleOut(targetScale = 1.3f, animationSpec = tween(160)))
+
 @Composable
-private fun TopButton(glyph: Glyph, label: String, on: Boolean, onClick: () -> Unit) {
-    val tint = if (on) Pal.accent else OnInk
-    Column(
-        Modifier.width(52.dp).clip(RoundedCornerShape(12.dp)).tap(onClick = onClick),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        GlyphView(glyph, tint, 20.dp)
-        Txt(label, 10, FontWeight.Medium, if (on) tint else Dim, Modifier.padding(top = 1.dp), maxLines = 1)
+private fun TopButton(glyph: Glyph, label: String, on: Boolean, ui: Turn, onClick: () -> Unit) {
+    val tint by androidx.compose.animation.animateColorAsState(if (on) Pal.accent else OnInk, tween(200), label = "tint")
+    Box(Modifier.size(52.dp).press(onClick = onClick), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.graphicsLayer { rotationZ = ui.angle() },
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            AnimatedContent(glyph, transitionSpec = { flip() }, label = "glyph") { GlyphView(it, tint, 20.dp) }
+            AnimatedContent(label, transitionSpec = { flip() }, label = "label") {
+                Txt(it, 10, FontWeight.Medium, if (on) tint else Dim, Modifier.padding(top = 1.dp), maxLines = 1)
+            }
+        }
     }
 }
 
@@ -187,7 +272,7 @@ private fun PermissionAsk(onAsk: () -> Unit) {
         Txt("需要相機權限才能拍照", 17, FontWeight.SemiBold, OnInk, Modifier.padding(top = 14.dp))
         Txt("照片只會存在這支手機的相簿", 13, color = Dim, modifier = Modifier.padding(top = 4.dp))
         Box(
-            Modifier.padding(top = 18.dp).height(44.dp).clip(CircleShape).background(Pal.accent).tap(onClick = onAsk)
+            Modifier.padding(top = 18.dp).height(44.dp).clip(CircleShape).background(Pal.accent).press(onClick = onAsk)
                 .padding(horizontal = 22.dp),
             contentAlignment = Alignment.Center,
         ) { Txt("允許使用相機", 16, FontWeight.SemiBold, Color.White) }
@@ -196,8 +281,12 @@ private fun PermissionAsk(onAsk: () -> Unit) {
 
 // ---------------- viewfinder ----------------
 
+/** Corners as the photographer sees them, whichever way the phone is held. */
+private fun cornerTopLeft(q: Int) = when (q) { -90 -> Alignment.BottomStart; 90 -> Alignment.TopEnd; else -> Alignment.TopStart }
+private fun cornerTopRight(q: Int) = when (q) { -90 -> Alignment.TopStart; 90 -> Alignment.BottomEnd; else -> Alignment.TopEnd }
+
 @Composable
-private fun Viewfinder(c: AppController, active: Boolean) {
+private fun Viewfinder(c: AppController, active: Boolean, ui: Turn) {
     val s = c.shoot
     val context = LocalContext.current
     val owner = context as? ComponentActivity
@@ -208,7 +297,9 @@ private fun Viewfinder(c: AppController, active: Boolean) {
     var holdOriginal by remember { mutableStateOf(false) }
     var focusAt by remember { mutableStateOf<Offset?>(null) }
     var focusStamp by remember { mutableLongStateOf(0L) }
+    var focusOk by remember { mutableStateOf<Boolean?>(null) }
     var evShownAt by remember { mutableLongStateOf(0L) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     // connect the camera only while this tab is on screen
     DisposableEffect(active, preview, owner) {
@@ -219,13 +310,45 @@ private fun Viewfinder(c: AppController, active: Boolean) {
         }
         onDispose { if (active) s.unbind() }
     }
-    LaunchedEffect(look, preview) { preview?.look = look }
+
+    // cross-fade from the old look to the new one
+    var fadeShot by remember { mutableStateOf<ImageBitmap?>(null) }
+    val fade = remember { Animatable(0f) }
+    LaunchedEffect(look, preview) {
+        val v = preview ?: return@LaunchedEffect
+        if (started && v.look !== look) {
+            fadeShot = v.snapshot()?.asImageBitmap()
+            fade.snapTo(1f)
+            v.look = look
+            fade.animateTo(0f, tween(320, easing = FastOutSlowInEasing))
+            fadeShot = null
+        } else {
+            v.look = look
+        }
+    }
+    // lens / front-back switch: blur the last picture until the new camera shows up
+    var switchShot by remember { mutableStateOf<ImageBitmap?>(null) }
+    val switchFlip = remember { Animatable(0f) }
+    LaunchedEffect(s.cameraSwitchCount) {
+        if (s.cameraSwitchCount == 0) return@LaunchedEffect
+        switchShot = preview?.snapshot()?.asImageBitmap()
+        started = false
+        switchFlip.snapTo(0f)
+        switchFlip.animateTo(1f, tween(380, easing = FastOutSlowInEasing))
+    }
+    LaunchedEffect(started) {
+        if (started && switchShot != null) {
+            delay(120)
+            switchShot = null
+        }
+    }
     LaunchedEffect(holdOriginal, preview) { preview?.original = holdOriginal }
-    LaunchedEffect(s.ratio, preview) { preview?.ratio = s.ratio }
     LaunchedEffect(s.lutVersion, preview) { preview?.reloadLut() }
 
+    val aspect by animateFloatAsState(s.ratio.short / s.ratio.long, spring(dampingRatio = 0.85f, stiffness = 380f), label = "ratio")
+    SideEffect { preview?.aspect = aspect }
+
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        val aspect = s.ratio.short / s.ratio.long // width / height, upright
         val w = if (maxWidth / maxHeight < aspect) maxWidth else maxHeight * aspect
         val h = w / aspect
         Box(Modifier.size(w, h).clip(RoundedCornerShape(6.dp))) {
@@ -239,7 +362,25 @@ private fun Viewfinder(c: AppController, active: Boolean) {
                 onRelease = { it.release() },
                 modifier = Modifier.fillMaxSize(),
             )
-            if (!started) Box(Modifier.fillMaxSize().background(Ink))
+            fadeShot?.let {
+                Image(it, null, Modifier.fillMaxSize().graphicsLayer { alpha = fade.value }, contentScale = ContentScale.FillBounds)
+            }
+            val sw = switchShot
+            if (sw != null) {
+                Image(
+                    sw, null,
+                    Modifier.fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = 1f - 0.08f * kotlin.math.sin(switchFlip.value * Math.PI).toFloat()
+                            scaleY = scaleX
+                        }
+                        .then(if (Build.VERSION.SDK_INT >= 31) Modifier.blur(24.dp) else Modifier)
+                        .graphicsLayer { alpha = 0.92f },
+                    contentScale = ContentScale.FillBounds,
+                )
+            } else if (!started) {
+                Box(Modifier.fillMaxSize().background(Ink))
+            }
 
             val density = LocalDensity.current
             val wPx = with(density) { w.toPx() }
@@ -257,6 +398,8 @@ private fun Viewfinder(c: AppController, active: Boolean) {
                         val startEv = s.ev
                         val startZoom = s.zoom
                         var zoomAcc = 1f
+                        var lastEv = s.ev
+                        var lastZoomStep = floor(s.shownZoom * 2f)
                         while (true) {
                             val e = awaitPointerEvent()
                             val pressed = e.changes.filter { it.pressed }
@@ -265,6 +408,8 @@ private fun Viewfinder(c: AppController, active: Boolean) {
                                 mode = 2
                                 zoomAcc *= e.calculateZoom()
                                 s.changeZoom(startZoom * zoomAcc)
+                                val step = floor(s.shownZoom * 2f)
+                                if (step != lastZoomStep) { lastZoomStep = step; s.feedback.tick() }
                                 e.changes.forEach { it.consume() }
                                 continue
                             }
@@ -275,6 +420,7 @@ private fun Viewfinder(c: AppController, active: Boolean) {
                             }
                             if (mode == 1 && evRange.value > 0f) {
                                 s.changeEv(startEv - d.y / hPx * 4f)
+                                if (s.ev != lastEv) { lastEv = s.ev; s.feedback.tick() }
                                 evShownAt = System.currentTimeMillis()
                                 pressed[0].consume()
                             }
@@ -282,9 +428,17 @@ private fun Viewfinder(c: AppController, active: Boolean) {
                         if (mode == 0) {
                             focusAt = start
                             focusStamp = System.currentTimeMillis()
+                            focusOk = null
+                            s.feedback.tick()
                             preview?.let { v ->
                                 val (fx, fy) = v.toFrame(start.x / wPx, start.y / hPx)
-                                s.focusAt(v.display, fx, fy)
+                                val stamp = focusStamp
+                                s.focusAt(v.display, fx, fy) { ok ->
+                                    if (stamp == focusStamp) {
+                                        focusOk = ok
+                                        if (ok) s.feedback.confirm()
+                                    }
+                                }
                             }
                         }
                     }
@@ -292,37 +446,55 @@ private fun Viewfinder(c: AppController, active: Boolean) {
             )
 
             if (s.grid) GridLines()
-            if (s.level) LevelLine(active)
+            if (s.level) LevelLine(active, s)
 
-            // focus ring
+            // focus ring: lands with a little bounce, turns green once focused
             val fp = focusAt
             if (fp != null) {
-                LaunchedEffect(focusStamp) { delay(2500); if (System.currentTimeMillis() - focusStamp >= 2400) focusAt = null }
-                val k by animateFloatAsState(1f, tween(220), label = "ring")
-                val ringPx = with(density) { 70.dp.toPx() }
+                LaunchedEffect(focusStamp) { delay(2600); if (System.currentTimeMillis() - focusStamp >= 2500) focusAt = null }
+                val k = remember(focusStamp) { Animatable(1.45f) }
+                LaunchedEffect(focusStamp) { k.animateTo(1f, Bouncy) }
+                val color by androidx.compose.animation.animateColorAsState(
+                    when (focusOk) { true -> FocusOk; false -> Focus.copy(alpha = 0.5f); null -> Focus }, tween(180), label = "af",
+                )
+                val ringPx = with(density) { 72.dp.toPx() }
                 Canvas(
-                    Modifier.offset { IntOffset((fp.x - ringPx / 2).roundToInt(), (fp.y - ringPx / 2).roundToInt()) }.size(70.dp),
+                    Modifier.offset { IntOffset((fp.x - ringPx / 2).roundToInt(), (fp.y - ringPx / 2).roundToInt()) }.size(72.dp)
+                        .graphicsLayer { scaleX = k.value; scaleY = k.value },
                 ) {
-                    drawRect(Color(0xFFFFD54A), style = Stroke(1.5.dp.toPx()), alpha = k)
+                    val sw = 1.6.dp.toPx()
+                    val l = size.minDimension * 0.22f
+                    // corner brackets, like a camera's AF frame
+                    for ((x, y) in listOf(0f to 0f, size.width to 0f, 0f to size.height, size.width to size.height)) {
+                        val dx = if (x == 0f) l else -l
+                        val dy = if (y == 0f) l else -l
+                        drawLine(color, Offset(x, y), Offset(x + dx, y), sw, StrokeCap.Round)
+                        drawLine(color, Offset(x, y), Offset(x, y + dy), sw, StrokeCap.Round)
+                    }
+                    drawCircle(color, radius = 2.dp.toPx(), center = center)
                 }
             }
 
             // exposure readout while dragging
-            var now by remember { mutableLongStateOf(0L) }
-            LaunchedEffect(evShownAt) { now = evShownAt; delay(1300); now = 0L }
-            AnimatedVisibility(now != 0L, Modifier.align(Alignment.CenterEnd).padding(end = 12.dp), enter = fadeIn(), exit = fadeOut()) {
-                Box(Modifier.clip(CircleShape).background(Color(0x99000000)).padding(horizontal = 10.dp, vertical = 6.dp)) {
-                    Txt(evLabel(s.ev), 14, FontWeight.SemiBold, Color(0xFFFFD54A))
-                }
+            var showEv by remember { mutableStateOf(false) }
+            LaunchedEffect(evShownAt) { if (evShownAt != 0L) { showEv = true; delay(1200); showEv = false } }
+            AnimatedVisibility(showEv, Modifier.align(Alignment.Center), enter = fadeIn() + scaleIn(initialScale = 0.8f), exit = fadeOut()) {
+                Box(
+                    Modifier.turned(ui.quarter, ui.angle).clip(CircleShape).background(Color(0x99000000))
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                ) { Txt(evLabel(s.ev), 18, FontWeight.SemiBold, Focus) }
             }
 
-            // what is being applied
-            Row(
-                Modifier.align(Alignment.TopStart).padding(10.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            // what is being applied — reads upright in the photographer's top-left corner
+            Column(
+                Modifier.align(cornerTopLeft(ui.quarter)).padding(10.dp).turned(ui.quarter, ui.angle),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 if (recipe != null) {
                     val missing = look.lutKey != null && look.lutKey !in s.installed
+                    AnimatedContent(recipe.name.ifEmpty { "未命名" }, transitionSpec = { flip() }, label = "name") {
+                        Chip(it, bold = true)
+                    }
                     Chip(
                         when {
                             holdOriginal -> "原圖"
@@ -332,48 +504,61 @@ private fun Viewfinder(c: AppController, active: Boolean) {
                         },
                     )
                 }
-                if (s.ev != 0f) Chip(evLabel(s.ev))
+                AnimatedVisibility(s.ev != 0f, enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) { Chip(evLabel(s.ev)) }
             }
 
             // hold to compare with the plain picture
             if (recipe != null) {
+                val bg by androidx.compose.animation.animateColorAsState(if (holdOriginal) Pal.accent else Color(0x88000000), label = "orig")
+                val k by animateFloatAsState(if (holdOriginal) 1.08f else 1f, Bouncy, label = "origK")
                 Box(
                     Modifier
-                        .align(Alignment.TopEnd)
+                        .align(cornerTopRight(ui.quarter))
                         .padding(10.dp)
+                        .turned(ui.quarter, ui.angle)
+                        .graphicsLayer { scaleX = k; scaleY = k }
                         .clip(CircleShape)
-                        .background(if (holdOriginal) Pal.accent else Color(0x88000000))
+                        .background(bg)
                         .pointerInput(Unit) {
                             awaitEachGesture {
                                 awaitFirstDown().consume()
                                 holdOriginal = true
+                                s.feedback.tick()
                                 while (true) {
                                     val e = awaitPointerEvent()
                                     e.changes.forEach { it.consume() }
                                     if (e.changes.none { it.pressed }) break
                                 }
                                 holdOriginal = false
+                                s.feedback.tick()
                             }
                         }
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                 ) { Txt("按住看原圖", 12, FontWeight.SemiBold, Color.White) }
             }
 
-            ZoomChips(c, Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp))
+            ZoomChips(s, ui, Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp))
 
-            // countdown
-            AnimatedVisibility(s.countdown > 0, Modifier.align(Alignment.Center), enter = fadeIn() + scaleIn(), exit = fadeOut()) {
-                Txt("${s.countdown}", 96, FontWeight.Bold, Color(0xE6FFFFFF))
+            // countdown: each second pops in
+            Box(Modifier.align(Alignment.Center).turned(ui.quarter, ui.angle)) {
+                AnimatedContent(
+                    s.countdown,
+                    transitionSpec = {
+                        (fadeIn(tween(120)) + scaleIn(initialScale = 1.8f, animationSpec = spring(0.5f, 500f))) togetherWith
+                            (fadeOut(tween(150)) + scaleOut(targetScale = 0.6f))
+                    },
+                    label = "count",
+                ) { n -> if (n > 0) Txt("$n", 110, FontWeight.Bold, Color(0xEEFFFFFF)) else Spacer(Modifier.size(1.dp)) }
             }
 
             // shutter blink
             val blink = remember { Animatable(0f) }
             LaunchedEffect(s.shutterCount) {
-                if (s.shutterCount > 0) { blink.snapTo(0.85f); blink.animateTo(0f, tween(260)) }
+                if (s.shutterCount > 0) { blink.snapTo(0.9f); blink.animateTo(0f, tween(300)) }
             }
             if (blink.value > 0f) Box(Modifier.fillMaxSize().graphicsLayer { alpha = blink.value }.background(Color.Black))
 
-            LutBanner(c, look, Modifier.align(Alignment.BottomCenter).padding(bottom = 56.dp, start = 12.dp, end = 12.dp))
+            LutBanner(c, look, Modifier.align(Alignment.BottomCenter).padding(bottom = 64.dp, start = 12.dp, end = 12.dp))
         }
     }
 }
@@ -384,9 +569,9 @@ private fun evLabel(ev: Float): String {
 }
 
 @Composable
-private fun Chip(text: String) {
+private fun Chip(text: String, bold: Boolean = false) {
     Box(Modifier.clip(CircleShape).background(Color(0x88000000)).padding(horizontal = 10.dp, vertical = 5.dp)) {
-        Txt(text, 12, FontWeight.Medium, Color.White, maxLines = 1)
+        Txt(text, if (bold) 13 else 12, if (bold) FontWeight.SemiBold else FontWeight.Medium, Color.White, maxLines = 1)
     }
 }
 
@@ -404,64 +589,98 @@ private fun GridLines() {
     }
 }
 
+/** A line that always lies along the real horizon; it turns yellow (with a tap) when the phone is level. */
 @Composable
-private fun LevelLine(active: Boolean) {
+private fun LevelLine(active: Boolean, s: ShootController) {
     val context = LocalContext.current
     var roll by remember { mutableFloatStateOf(0f) }
+    var seeded by remember { mutableStateOf(false) }
     DisposableEffect(active) {
         val sm = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
         val sensor = sm.getDefaultSensor(Sensor.TYPE_GRAVITY) ?: sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         val l = object : SensorEventListener {
             override fun onSensorChanged(e: SensorEvent) {
                 val a = Math.toDegrees(atan2(e.values[0].toDouble(), e.values[1].toDouble())).toFloat()
-                roll = roll * 0.8f + a * 0.2f
+                if (!seeded) { roll = a; seeded = true; return }
+                // smooth, taking the short way round ±180°
+                var d = a - roll
+                while (d > 180f) d -= 360f
+                while (d < -180f) d += 360f
+                roll += d * 0.2f
             }
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         }
         if (active && sensor != null) sm.registerListener(l, sensor, SensorManager.SENSOR_DELAY_UI)
         onDispose { sm.unregisterListener(l) }
     }
-    // deviation from the nearest upright / sideways position
     val nearest = (roll / 90f).roundToInt() * 90f
     val off = roll - nearest
-    val ok = abs(off) < 1.2f
-    val color = if (ok) Color(0xFFFFD54A) else Color(0xCCFFFFFF)
+    val ok = abs(off) < 1.0f
+    LaunchedEffect(ok) { if (ok && seeded) s.feedback.click() }
+    val color by androidx.compose.animation.animateColorAsState(if (ok) Focus else Color(0xCCFFFFFF), tween(150), label = "lvl")
     Canvas(Modifier.fillMaxSize()) {
         val c = center
-        val len = size.minDimension * 0.22f
-        drawLine(color.copy(alpha = 0.5f), Offset(c.x - len * 1.5f, c.y), Offset(c.x - len * 1.1f, c.y), 1.5.dp.toPx())
-        drawLine(color.copy(alpha = 0.5f), Offset(c.x + len * 1.1f, c.y), Offset(c.x + len * 1.5f, c.y), 1.5.dp.toPx())
-        rotate(-off, c) {
-            drawLine(color, Offset(c.x - len, c.y), Offset(c.x + len, c.y), (if (ok) 2.5.dp else 1.5.dp).toPx())
+        val len = size.minDimension * 0.24f
+        // fixed marks show where "level" is for the way the phone is held
+        rotate(-nearest, c) {
+            drawLine(color.copy(alpha = 0.55f), Offset(c.x - len * 1.45f, c.y), Offset(c.x - len * 1.1f, c.y), 1.5.dp.toPx(), StrokeCap.Round)
+            drawLine(color.copy(alpha = 0.55f), Offset(c.x + len * 1.1f, c.y), Offset(c.x + len * 1.45f, c.y), 1.5.dp.toPx(), StrokeCap.Round)
+        }
+        // the moving line: the real horizon
+        rotate(-roll, c) {
+            drawLine(color, Offset(c.x - len, c.y), Offset(c.x + len, c.y), (if (ok) 2.5.dp else 1.6.dp).toPx(), StrokeCap.Round)
         }
     }
 }
 
 @Composable
-private fun ZoomChips(c: AppController, modifier: Modifier) {
-    val s = c.shoot
+private fun ZoomChips(s: ShootController, ui: Turn, modifier: Modifier) {
     if (!s.cameraReady) return
-    val stops = listOfNotNull(
-        s.zoomMin.takeIf { it < 0.95f }, 1f, 2f.takeIf { s.zoomMax >= 2f }, 5f.takeIf { s.zoomMax >= 5f },
-    )
+    val lenses = if (s.useFront) emptyList() else s.lenses
+    val optical = lenses.size >= 2
+    // lenses the phone opens to apps, or plain digital steps on the one camera
+    val stops: List<Float> = if (optical) lenses.map { it.ratio }
+    else listOfNotNull(1f, 2f.takeIf { s.zoomMax >= 2f }, 5f.takeIf { s.zoomMax >= 5f })
     if (stops.size < 2 && s.zoom == 1f) return
-    val nearest = stops.minByOrNull { abs(it - s.zoom) }
-    Row(
-        modifier.clip(CircleShape).background(Color(0x66000000)).padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        for (z in stops) {
-            val on = z == nearest
-            val label = if (on && abs(s.zoom - z) > 0.05f) "%.1f×".format(s.zoom) else zoomLabel(z)
-            Box(
-                Modifier.size(38.dp).clip(CircleShape).background(if (on) Color(0x33FFFFFF) else Color.Transparent).tap { s.changeZoom(z) },
-                contentAlignment = Alignment.Center,
-            ) { Txt(label, if (on) 12 else 11, FontWeight.SemiBold, if (on) Color(0xFFFFD54A) else Color.White) }
+    val realLenses = optical && lenses.any { it.zoomRatio == null }
+    val current = if (realLenses) s.lensIndex else stops.indices.minByOrNull { abs(stops[it] - s.shownZoom) } ?: 0
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        AnimatedVisibility(!optical && s.shownZoom > 1.01f, enter = fadeIn(), exit = fadeOut()) {
+            Box(Modifier.padding(bottom = 6.dp).clip(CircleShape).background(Color(0x66000000)).padding(horizontal = 8.dp, vertical = 3.dp)) {
+                Txt("數位放大", 10, FontWeight.Medium, Dim)
+            }
+        }
+        Row(
+            Modifier.clip(CircleShape).background(Color(0x66000000)).padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            stops.forEachIndexed { i, z ->
+                val on = i == current
+                val shown = s.shownZoom
+                val label = when {
+                    on && abs(shown - z) > 0.05f -> "%.1f×".format(shown)
+                    z < 1f -> "%.1f".format(z).trimEnd('0').trimEnd('.')
+                    abs(z - z.roundToInt()) > 0.05f -> "%.1f×".format(z)
+                    else -> "${z.roundToInt()}×"
+                }
+                val k by animateFloatAsState(if (on) 1f else 0.82f, Bouncy, label = "z$i")
+                val bg by androidx.compose.animation.animateColorAsState(if (on) Color(0x33FFFFFF) else Color.Transparent, label = "zb$i")
+                Box(
+                    Modifier.size(40.dp).graphicsLayer { scaleX = k; scaleY = k }.clip(CircleShape).background(bg)
+                        .press(to = 0.8f) {
+                            s.feedback.click()
+                            if (optical) s.selectLens(i) else s.changeZoom(z)
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.graphicsLayer { rotationZ = ui.angle() }) {
+                        Txt(label, if (on) 12 else 11, FontWeight.SemiBold, if (on) Focus else Color.White, maxLines = 1)
+                    }
+                }
+            }
         }
     }
 }
-
-private fun zoomLabel(z: Float): String = if (z < 1f) "%.1f".format(z).trimEnd('0').trimEnd('.') else "${z.roundToInt()}×"
 
 @Composable
 private fun LutBanner(c: AppController, look: Look, modifier: Modifier) {
@@ -475,8 +694,9 @@ private fun LutBanner(c: AppController, look: Look, modifier: Modifier) {
     ) {
         if (s.lutBusy) {
             Txt(s.lutText.ifEmpty { "處理中…" }, 14, FontWeight.Medium, OnInk)
+            val p by animateFloatAsState(s.lutProgress.coerceIn(0.02f, 1f), label = "lut")
             Box(Modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(Color(0x33FFFFFF))) {
-                Box(Modifier.fillMaxWidth(s.lutProgress.coerceIn(0.02f, 1f)).height(4.dp).clip(CircleShape).background(Pal.accent))
+                Box(Modifier.fillMaxWidth(p).height(4.dp).clip(CircleShape).background(Pal.accent))
             }
         } else {
             val size = if (s.lutSize > 0) "約 ${s.lutSize / 1_000_000} MB" else "約 45 MB"
@@ -485,11 +705,12 @@ private fun LutBanner(c: AppController, look: Look, modifier: Modifier) {
             if (s.lutText.isNotEmpty()) Txt(s.lutText, 12, color = Color(0xFFFF8A80))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box(
-                    Modifier.height(38.dp).clip(CircleShape).background(Pal.accent).tap { s.downloadLuts() }.padding(horizontal = 18.dp),
+                    Modifier.height(38.dp).clip(CircleShape).background(Pal.accent).press { s.feedback.click(); s.downloadLuts() }
+                        .padding(horizontal = 18.dp),
                     contentAlignment = Alignment.Center,
                 ) { Txt("下載", 14, FontWeight.SemiBold, Color.White) }
                 Box(
-                    Modifier.height(38.dp).clip(CircleShape).border(1.dp, Dim, CircleShape).tap { c.tab = com.enweilo.fujirecipes.Tab.Settings }
+                    Modifier.height(38.dp).clip(CircleShape).border(1.dp, Dim, CircleShape).press { c.tab = Tab.Settings }
                         .padding(horizontal = 16.dp),
                     contentAlignment = Alignment.Center,
                 ) { Txt("手動匯入", 14, FontWeight.Medium, OnInk) }
@@ -503,21 +724,30 @@ private fun LutBanner(c: AppController, look: Look, modifier: Modifier) {
 @Composable
 private fun RecipeStrip(c: AppController) {
     val s = c.shoot
-    val items = listOf<com.enweilo.fujirecipes.data.Recipe?>(null) + c.recipes
+    val items = listOf<Recipe?>(null) + c.recipes
     val selectedIndex = items.indexOfFirst { it?.id == s.recipeId }.coerceAtLeast(0)
     val state = rememberLazyListState(initialFirstVisibleItemIndex = selectedIndex)
     val fling = rememberSnapFlingBehavior(state, SnapPosition.Center)
-    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
+    fun centreIndex(): Int? {
+        val info = state.layoutInfo
+        val mid = (info.viewportStartOffset + info.viewportEndOffset) / 2
+        return info.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - mid) }?.index
+    }
+
+    // a light tick for every recipe that passes the middle, like turning a dial
+    LaunchedEffect(state) {
+        snapshotFlow { if (state.isScrollInProgress) centreIndex() else null }
+            .filter { it != null }.distinctUntilChanged().drop(1)
+            .collect { s.feedback.tick() }
+    }
     // the chip that stops in the middle becomes the recipe
     LaunchedEffect(state, items.size) {
         snapshotFlow { state.isScrollInProgress }.distinctUntilChanged().filter { !it }.collect {
-            val info = state.layoutInfo
-            val mid = (info.viewportStartOffset + info.viewportEndOffset) / 2
-            val centre = info.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - mid) } ?: return@collect
-            val r = items.getOrNull(centre.index)
+            val idx = centreIndex() ?: return@collect
+            val r = items.getOrNull(idx)
             if (r?.id != s.recipeId) {
-                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                s.feedback.click()
                 s.selectRecipe(r?.id)
             }
         }
@@ -527,6 +757,7 @@ private fun RecipeStrip(c: AppController) {
         if (!state.isScrollInProgress) state.animateScrollToItem(selectedIndex)
     }
 
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     BoxWithConstraints(Modifier.fillMaxWidth().height(58.dp)) {
         val side = maxWidth / 2 - 60.dp
         LazyRow(
@@ -537,18 +768,26 @@ private fun RecipeStrip(c: AppController) {
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxSize(),
         ) {
-            itemsIndexed(items, key = { _, r -> r?.id ?: "none" }) { _, r ->
+            itemsIndexed(items, key = { _, r -> r?.id ?: "none" }) { i, r ->
                 val on = r?.id == s.recipeId
-                val scale by animateFloatAsState(if (on) 1f else 0.92f, label = "chip")
+                val scale by animateFloatAsState(if (on) 1f else 0.9f, Bouncy, label = "chip")
+                val bg by androidx.compose.animation.animateColorAsState(if (on) Color(0x26FFFFFF) else Color(0x12FFFFFF), label = "chipBg")
+                val border by androidx.compose.animation.animateColorAsState(if (on) Pal.accent else Color.Transparent, label = "chipBd")
                 Row(
                     Modifier
                         .width(120.dp)
                         .height(42.dp)
                         .graphicsLayer { scaleX = scale; scaleY = scale }
                         .clip(CircleShape)
-                        .background(if (on) Color(0x26FFFFFF) else Color(0x12FFFFFF))
-                        .border(if (on) 1.5.dp else 0.dp, if (on) Pal.accent else Color.Transparent, CircleShape)
-                        .tap { s.selectRecipe(r?.id) }
+                        .background(bg)
+                        .border(1.5.dp, border, CircleShape)
+                        .press(to = 0.92f) {
+                            if (!on) {
+                                s.feedback.click()
+                                s.selectRecipe(r?.id)
+                                scope.launch { state.animateScrollToItem(i) }
+                            }
+                        }
                         .padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -570,7 +809,7 @@ private fun RecipeStrip(c: AppController) {
 // ---------------- shutter row ----------------
 
 @Composable
-private fun BottomControls(c: AppController) {
+private fun BottomControls(c: AppController, ui: Turn, onThumbPlaced: (Rect) -> Unit) {
     val s = c.shoot
     val context = LocalContext.current
     Row(
@@ -578,11 +817,18 @@ private fun BottomControls(c: AppController) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        // last photo
+        // last photo: pops when a new one lands
+        val pop = remember { Animatable(1f) }
+        LaunchedEffect(s.lastThumb) {
+            if (s.lastThumb != null) { delay(380); pop.snapTo(0.7f); pop.animateTo(1f, Bouncy) }
+        }
         Box(
-            Modifier.size(52.dp).clip(RoundedCornerShape(14.dp)).background(Color(0x22FFFFFF))
-                .tap(enabled = s.lastUri != null) {
-                    val uri = s.lastUri ?: return@tap
+            Modifier.size(52.dp).onGloballyPositioned { onThumbPlaced(it.boundsInRoot()) }
+                .graphicsLayer { scaleX = pop.value; scaleY = pop.value; rotationZ = ui.angle() }
+                .clip(RoundedCornerShape(14.dp)).background(Color(0x22FFFFFF))
+                .press(enabled = s.lastUri != null) {
+                    val uri = s.lastUri ?: return@press
+                    s.feedback.click()
                     runCatching {
                         context.startActivity(
                             Intent(Intent.ACTION_VIEW).setDataAndType(uri, "image/jpeg")
@@ -596,47 +842,88 @@ private fun BottomControls(c: AppController) {
                 Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             }
             if (s.processing > 0) {
-                Box(Modifier.fillMaxSize().background(Color(0x88000000)), contentAlignment = Alignment.Center) {
-                    Spinner()
-                }
+                Box(Modifier.fillMaxSize().background(Color(0x88000000)), contentAlignment = Alignment.Center) { Spinner() }
             }
         }
 
-        // shutter
-        val pressScale by animateFloatAsState(if (s.capturing) 0.88f else 1f, label = "shutter")
+        // shutter: the inner disc sinks while pressed, like a real button
+        var down by remember { mutableStateOf(false) }
+        val inner by animateFloatAsState(if (down || s.capturing) 0.78f else 1f, spring(0.45f, 700f), label = "shutter")
+        val fill by androidx.compose.animation.animateColorAsState(if (s.countdown > 0) Pal.accent else OnInk, label = "fill")
         Box(
             Modifier
-                .size(78.dp)
-                .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
+                .size(80.dp)
                 .border(4.dp, OnInk, CircleShape)
-                .padding(7.dp)
-                .clip(CircleShape)
-                .background(if (s.countdown > 0) Pal.accent else OnInk)
-                .tap(enabled = s.cameraReady) { if (s.countdown > 0) s.cancelTimer() else s.shutter() },
-        )
-
-        // front / back
-        Box(
-            Modifier.size(52.dp).clip(CircleShape).background(Color(0x22FFFFFF)).tap(enabled = s.hasFront) { s.switchCamera() },
+                .pointerInput(s.cameraReady) {
+                    if (!s.cameraReady) return@pointerInput
+                    detectTapGestures(
+                        onPress = { down = true; s.feedback.tick(); tryAwaitRelease(); down = false },
+                        onTap = { if (s.countdown > 0) s.cancelTimer() else s.shutter() },
+                    )
+                },
             contentAlignment = Alignment.Center,
-        ) { GlyphView(Glyph.Flip, OnInk, 24.dp) }
+        ) {
+            Box(Modifier.size(64.dp).graphicsLayer { scaleX = inner; scaleY = inner }.clip(CircleShape).background(fill))
+        }
+
+        // front / back: the icon spins round on each switch
+        val spin = remember { Animatable(0f) }
+        val scope = androidx.compose.runtime.rememberCoroutineScope()
+        Box(
+            Modifier.size(52.dp).clip(CircleShape).background(Color(0x22FFFFFF))
+                .press(enabled = s.hasFront) {
+                    s.feedback.click()
+                    s.switchCamera()
+                    scope.launch { spin.animateTo(spin.value + 180f, spring(0.6f, 300f)) }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(Modifier.graphicsLayer { rotationZ = ui.angle() + spin.value }) { GlyphView(Glyph.Flip, OnInk, 24.dp) }
+        }
     }
+}
+
+/** The new photo flies from the viewfinder into the thumbnail. */
+@Composable
+private fun ThumbFlight(s: ShootController, finder: Rect, thumb: Rect) {
+    val bmp = s.lastThumb ?: return
+    val t = remember(bmp) { Animatable(0f) }
+    var done by remember(bmp) { mutableStateOf(false) }
+    LaunchedEffect(bmp) {
+        t.animateTo(1f, tween(460, easing = FastOutSlowInEasing))
+        done = true
+    }
+    if (done || finder == Rect.Zero || thumb == Rect.Zero) return
+    val img = remember(bmp) { bmp.asImageBitmap() }
+    val density = LocalDensity.current
+    val sizePx = with(density) { 52.dp.toPx() }
+    val startScale = min(finder.width, finder.height) * 0.55f / sizePx
+    Box(
+        Modifier
+            .offset { IntOffset((thumb.center.x - sizePx / 2).roundToInt(), (thumb.center.y - sizePx / 2).roundToInt()) }
+            .size(52.dp)
+            .graphicsLayer {
+                val p = t.value
+                translationX = (finder.center.x - thumb.center.x) * (1 - p)
+                translationY = (finder.center.y - thumb.center.y) * (1 - p) - 60f * kotlin.math.sin(p * Math.PI).toFloat()
+                val sc = startScale + (1f - startScale) * p
+                scaleX = sc; scaleY = sc
+                alpha = if (p < 0.92f) 1f else (1f - p) / 0.08f
+            }
+            .clip(RoundedCornerShape(10.dp)),
+    ) { Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
 }
 
 @Composable
 private fun Spinner() {
-    val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "spin")
-    val a by t.animateFloat(
-        0f, 360f,
-        androidx.compose.animation.core.infiniteRepeatable(tween(900, easing = androidx.compose.animation.core.LinearEasing)),
-        label = "a",
-    )
+    val t = rememberInfiniteTransition(label = "spin")
+    val a by t.animateFloat(0f, 360f, infiniteRepeatable(tween(900, easing = LinearEasing)), label = "a")
     Canvas(Modifier.size(22.dp)) {
-        drawArc(Color.White, a, 270f, false, style = Stroke(2.5.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round))
+        drawArc(Color.White, a, 270f, false, style = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round))
     }
 }
 
-/** For the settings page: LUT status and manual import. */
+/** For the settings page: shooting options, LUTs and what the phone's cameras allow. */
 @Composable
 fun ShootSettings(c: AppController) {
     val s = c.shoot
@@ -647,6 +934,8 @@ fun ShootSettings(c: AppController) {
     }
     Panel {
         ToggleRow("同時保存原圖", s.saveOriginal) { s.changeSaveOriginal(it) }
+        Divider()
+        ToggleRow("快門聲", s.shutterSoundOn) { s.changeShutterSound(it) }
         Divider()
         ToggleRow("音量鍵當快門", s.volumeShutter) { s.changeVolumeShutter(it) }
     }
@@ -670,6 +959,17 @@ fun ShootSettings(c: AppController) {
                     "手動匯入時請選富士官網下載的 GFX ETERNA 55 LUT zip，或其中 F-Log2 資料夾的 .cube 檔。",
                 12, color = p.sub,
             )
+        }
+    }
+    Spacer(Modifier.height(10.dp))
+    Panel {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Txt("相機資訊", 15, FontWeight.SemiBold)
+            if (s.cameraReport.isEmpty()) {
+                Txt("打開一次拍照分頁後，這裡會列出手機開放給 App 的鏡頭。", 12, color = p.sub)
+            } else {
+                s.cameraReport.forEach { Txt(it, 12, color = p.sub) }
+            }
         }
     }
 }

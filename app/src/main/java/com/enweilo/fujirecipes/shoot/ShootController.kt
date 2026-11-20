@@ -182,8 +182,14 @@ class ShootController(
         private set
     var volumeShutter by mutableStateOf(prefs.getBoolean("volumeShutter", true))
         private set
+    var shutterSoundOn by mutableStateOf(prefs.getBoolean("shutterSound", true))
+        private set
     var useFront by mutableStateOf(false)
         private set
+
+    val feedback = Feedback(app)
+
+    fun changeShutterSound(on: Boolean) { shutterSoundOn = on; prefs.edit().putBoolean("shutterSound", on).apply() }
 
     fun changeSaveOriginal(on: Boolean) { saveOriginal = on; prefs.edit().putBoolean("saveOriginal", on).apply() }
     fun changeVolumeShutter(on: Boolean) { volumeShutter = on; prefs.edit().putBoolean("volumeShutter", on).apply() }
@@ -247,6 +253,51 @@ class ShootController(
     var shutterCount by mutableIntStateOf(0)
         private set
 
+    /** How far the on-screen labels are turned so they read upright: 0, 90 or -90 degrees. */
+    var uiTurn by mutableIntStateOf(0)
+        private set
+
+    /** From an OrientationEventListener (degrees the phone is turned clockwise). */
+    fun onOrientation(o: Int) {
+        if (o < 0) return
+        // a little stickiness so it does not flip back and forth around 45°
+        val current = when (targetRotation) { Surface.ROTATION_270 -> 90; Surface.ROTATION_180 -> 180; Surface.ROTATION_90 -> 270; else -> 0 }
+        val diff = ((o - current + 540) % 360) - 180
+        if (kotlin.math.abs(diff) < 55) return
+        val (rot, turn) = when (o) {
+            in 45..134 -> Surface.ROTATION_270 to -90
+            in 135..224 -> Surface.ROTATION_180 to uiTurn
+            in 225..314 -> Surface.ROTATION_90 to 90
+            else -> Surface.ROTATION_0 to 0
+        }
+        targetRotation = rot
+        uiTurn = turn
+    }
+
+    /** One way of looking: a lens the phone lets apps open, or a zoom step on the main camera. */
+    class Lens(
+        val ratio: Float,
+        val selector: CameraSelector?,
+        /** for a zoom step on the main camera (a phone that switches lenses by itself) */
+        val zoomRatio: Float? = null,
+    ) {
+        val label: String get() = if (ratio < 0.95f) "%.1f".format(ratio).trimEnd('0').trimEnd('.') else "%.0f×".format(ratio).let {
+            if (kotlin.math.abs(ratio - ratio.roundToInt()) > 0.05f) "%.1f×".format(ratio) else it
+        }
+    }
+
+    /** Back lenses found on this phone, sorted wide to long. Only one = no real lens switching. */
+    var lenses by mutableStateOf<List<Lens>>(emptyList())
+        private set
+    var lensIndex by mutableIntStateOf(0)
+        private set
+    /** What the phone told us about its cameras, for 設定 → 相機資訊. */
+    var cameraReport by mutableStateOf<List<String>>(emptyList())
+        private set
+    /** Bumps when the camera is restarted (lens or front/back), for the switch animation. */
+    var cameraSwitchCount by mutableIntStateOf(0)
+        private set
+
     private var provider: ProcessCameraProvider? = null
     private var camera: Camera? = null
     private var capture: ImageCapture? = null
@@ -267,8 +318,101 @@ class ShootController(
             hasFront = runCatching { p.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) }.getOrDefault(false)
             val back = runCatching { p.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) }.getOrDefault(false)
             if (!back && hasFront) useFront = true
+            if (lenses.isEmpty()) discoverLenses(p)
             if (bound?.second === view) start(owner, view)
         }, ContextCompat.getMainExecutor(app))
+    }
+
+    private fun c2(info: androidx.camera.core.CameraInfo) = androidx.camera.camera2.interop.Camera2CameraInfo.from(info)
+
+    /** Equivalent focal length in mm (35 mm film), or null. */
+    @OptIn(ExperimentalCamera2Interop::class)
+    private fun equivalent(info: androidx.camera.core.CameraInfo): Float? = runCatching {
+        val c = c2(info)
+        val f = c.getCameraCharacteristic(android.hardware.camera2.CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            ?.minOrNull() ?: return null
+        val size = c.getCameraCharacteristic(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            ?: return null
+        val diag = kotlin.math.hypot(size.width.toDouble(), size.height.toDouble()).toFloat()
+        if (diag <= 0f) null else f * 43.27f / diag
+    }.getOrNull()
+
+    /**
+     * Looks for every back lens an app may use: cameras the phone lists on their own, and the lenses hidden
+     * inside a combined ("logical") camera.
+     */
+    @OptIn(ExperimentalCamera2Interop::class)
+    private fun discoverLenses(p: ProcessCameraProvider) {
+        val report = mutableListOf<String>()
+        val all = runCatching { p.availableCameraInfos }.getOrDefault(emptyList())
+        val main = runCatching { CameraSelector.DEFAULT_BACK_CAMERA.filter(all).firstOrNull() }.getOrNull()
+        val mainEq = main?.let { equivalent(it) }
+        class Found(val eq: Float, val selector: CameraSelector, val physical: Boolean, val intrinsic: Float)
+        val found = mutableListOf<Found>()
+        for (info in all) {
+            val id = runCatching { c2(info).cameraId }.getOrDefault("?")
+            val facing = when (info.lensFacing) {
+                CameraSelector.LENS_FACING_BACK -> "後"
+                CameraSelector.LENS_FACING_FRONT -> "前"
+                else -> "外接"
+            }
+            val eq = equivalent(info)
+            val physicals = runCatching { info.physicalCameraInfos }.getOrDefault(emptySet())
+            report += "相機 $id（$facing）：約 ${eq?.roundToInt() ?: "?"} mm" +
+                (if (info == main) "，預設主鏡頭" else "") +
+                (if (physicals.size > 1) "，內含 ${physicals.size} 顆實體鏡頭" else "")
+            if (info.lensFacing != CameraSelector.LENS_FACING_BACK) continue
+            val byId = CameraSelector.Builder().addCameraFilter { list -> list.filter { runCatching { c2(it).cameraId }.getOrNull() == id } }
+            if (eq != null) found += Found(eq, byId.build(), false, info.intrinsicZoomRatio)
+            if (physicals.size > 1) {
+                for (ph in physicals) {
+                    val pid = runCatching { c2(ph).cameraId }.getOrNull() ?: continue
+                    val peq = equivalent(ph)
+                    report += "　└ 實體鏡頭 $pid：約 ${peq?.roundToInt() ?: "?"} mm"
+                    if (peq == null) continue
+                    val sel = CameraSelector.Builder()
+                        .addCameraFilter { list -> list.filter { runCatching { c2(it).cameraId }.getOrNull() == id } }
+                        .setPhysicalCameraId(pid)
+                        .build()
+                    found += Found(peq, sel, true, androidx.camera.core.CameraInfo.INTRINSIC_ZOOM_RATIO_UNKNOWN)
+                }
+            }
+        }
+        val base = mainEq ?: found.firstOrNull()?.eq ?: 0f
+        val groups = mutableListOf<Found>()
+        for (f in found.sortedWith(compareBy<Found> { it.physical }.thenBy { it.eq })) {
+            // the same focal length found twice (own camera + inside the combined one): keep the first
+            if (groups.none { kotlin.math.abs(it.eq - f.eq) / it.eq < 0.06f }) groups += f
+        }
+        lenses = if (base <= 0f || groups.size < 2) emptyList() else groups.sortedBy { it.eq }.map { g ->
+            val r = if (g.intrinsic > 0f && !g.physical) g.intrinsic else g.eq / base
+            Lens(r, g.selector)
+        }
+        lensIndex = lenses.indexOfFirst { kotlin.math.abs(it.ratio - 1f) < 0.06f }.coerceAtLeast(0)
+        report += if (lenses.size >= 2) "可切換鏡頭：" + lenses.joinToString("、") { it.label }
+        else "手機沒有開放其他後鏡頭給 App 使用，放大是數位裁切"
+        cameraReport = report
+    }
+
+    /** Switch to lens [i] of [lenses]. */
+    fun selectLens(i: Int) {
+        val l = lenses.getOrNull(i) ?: return
+        if (i == lensIndex && !useFront) return
+        lensIndex = i
+        useFront = false
+        if (l.zoomRatio != null) {
+            changeZoom(l.zoomRatio)
+            return
+        }
+        cameraSwitchCount++
+        val b = bound ?: return
+        start(b.first, b.second)
+    }
+
+    /** Zoom as the photographer sees it: relative to the main lens. */
+    val shownZoom: Float get() {
+        val l = lenses.getOrNull(lensIndex)
+        return if (useFront || l == null || l.zoomRatio != null) zoom else l.ratio * zoom
     }
 
     @OptIn(ExperimentalCamera2Interop::class)
@@ -288,11 +432,30 @@ class ShootController(
             .build()
         view.setMirror(useFront)
         pv.surfaceProvider = view.surfaceProvider
+        val lens = lenses.getOrNull(lensIndex)
+        val wanted = when {
+            useFront -> CameraSelector.DEFAULT_FRONT_CAMERA
+            lens?.selector != null -> lens.selector
+            else -> CameraSelector.DEFAULT_BACK_CAMERA
+        }
         val cam = try {
-            p.bindToLifecycle(owner, if (useFront) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA, pv, ic)
+            p.bindToLifecycle(owner, wanted, pv, ic)
         } catch (e: Throwable) {
-            toast("相機啟動失敗：" + (e.message ?: ""))
-            return
+            if (wanted !== CameraSelector.DEFAULT_BACK_CAMERA && !useFront) {
+                // this lens is closed to apps; go back to the main one
+                toast("這顆鏡頭手機不開放給 App 使用")
+                lensIndex = lenses.indexOfFirst { kotlin.math.abs(it.ratio - 1f) < 0.06f }.coerceAtLeast(0)
+                try {
+                    p.unbindAll()
+                    p.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, pv, ic)
+                } catch (e2: Throwable) {
+                    toast("相機啟動失敗：" + (e2.message ?: ""))
+                    return
+                }
+            } else {
+                toast("相機啟動失敗：" + (e.message ?: ""))
+                return
+            }
         }
         camera = cam
         capture = ic
@@ -300,6 +463,12 @@ class ShootController(
         cameraReady = true
 
         cam.cameraInfo.zoomState.value?.let { zoomMin = it.minZoomRatio; zoomMax = it.maxZoomRatio; zoom = it.zoomRatio }
+        // a combined camera that can zoom below 1× switches to its wide lens by itself
+        if (!useFront && lenses.isEmpty() && zoomMin < 0.95f) {
+            lenses = listOf(Lens(zoomMin, null, zoomMin), Lens(1f, null, 1f))
+            lensIndex = 1
+            cameraReport = cameraReport + "主相機可縮小到 ${"%.1f".format(zoomMin)}×（手機自動切換超廣角）"
+        }
         cam.cameraInfo.zoomState.observe(owner) { z -> zoomMin = z.minZoomRatio; zoomMax = z.maxZoomRatio; zoom = z.zoomRatio }
         val es = cam.cameraInfo.exposureState
         evStep = es.exposureCompensationStep.toFloat().takeIf { it > 0f } ?: (1f / 3f)
@@ -323,6 +492,7 @@ class ShootController(
         if (!hasFront) return
         useFront = !useFront
         zoom = 1f
+        cameraSwitchCount++
         val b = bound ?: return
         start(b.first, b.second)
     }
@@ -344,7 +514,7 @@ class ShootController(
     }
 
     /** [x], [y] on the whole upright frame as shown on [display], 0..1 from its top-left. */
-    fun focusAt(display: android.view.Display?, x: Float, y: Float) {
+    fun focusAt(display: android.view.Display?, x: Float, y: Float, onResult: (Boolean) -> Unit = {}) {
         val cam = camera ?: return
         val factory = if (display != null) {
             androidx.camera.core.DisplayOrientedMeteringPointFactory(display, cam.cameraInfo, 1f, 1f)
@@ -355,7 +525,11 @@ class ShootController(
         val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
             .setAutoCancelDuration(4, java.util.concurrent.TimeUnit.SECONDS)
             .build()
-        cam.cameraControl.startFocusAndMetering(action)
+        val f = cam.cameraControl.startFocusAndMetering(action)
+        f.addListener({
+            val ok = runCatching { f.get().isFocusSuccessful }.getOrDefault(false)
+            onResult(ok)
+        }, ContextCompat.getMainExecutor(app))
     }
 
     private fun applyFlash() {
@@ -411,9 +585,11 @@ class ShootController(
     fun shutter() {
         if (capturing || countdown > 0 || capture == null) return
         if (timer > 0) {
-            scope.launch {
+            timerJob = scope.launch {
                 for (s in timer downTo 1) {
                     countdown = s
+                    if (shutterSoundOn) feedback.beep()
+                    feedback.tick()
                     delay(1000)
                 }
                 countdown = 0
@@ -424,8 +600,13 @@ class ShootController(
         }
     }
 
+    private var timerJob: kotlinx.coroutines.Job? = null
+
     fun cancelTimer() {
+        timerJob?.cancel()
+        timerJob = null
         countdown = 0
+        feedback.click()
     }
 
     private fun takePicture() {
@@ -434,8 +615,14 @@ class ShootController(
         val look = currentLook()
         val ratioNow = ratio
         val keepOriginal = saveOriginal
+        // which way the photo must turn: worked out from the phone's position now, not from what the camera writes
+        val info = camera?.cameraInfo
+        val wantTurn = info?.getSensorRotationDegrees(targetRotation) ?: 0
+        val sensorTurn = info?.getSensorRotationDegrees(Surface.ROTATION_0) ?: 0
         capturing = true
         shutterCount++
+        feedback.shutter()
+        if (shutterSoundOn) feedback.shutterSound()
         ic.takePicture(ContextCompat.getMainExecutor(app), object : ImageCapture.OnImageCapturedCallback() {
             override fun onCaptureSuccess(image: ImageProxy) {
                 capturing = false
@@ -452,7 +639,7 @@ class ShootController(
                 processing++
                 scope.launch {
                     val result = withContext(gl) {
-                        runCatching { develop(bytes, rotation, recipe, look, ratioNow, keepOriginal) }
+                        runCatching { develop(bytes, rotation, wantTurn, sensorTurn, recipe, look, ratioNow, keepOriginal) }
                     }
                     processing--
                     result.onSuccess { (uri, thumb) ->
@@ -474,19 +661,31 @@ class ShootController(
     /** Crops, applies the recipe, writes EXIF and saves. Runs on the GL thread. */
     @SuppressLint("NewApi")
     private fun develop(
-        bytes: ByteArray, rotation: Int, recipe: Recipe?, look: Look, ratio: Ratio, keepOriginal: Boolean,
+        bytes: ByteArray, rotation: Int, wantTurn: Int, sensorTurn: Int,
+        recipe: Recipe?, look: Look, ratio: Ratio, keepOriginal: Boolean,
     ): Pair<Uri?, Bitmap?> {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val srcExif = ExifInterface(ByteArrayInputStream(bytes))
         val written = srcExif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_UNDEFINED)
-        val fromCamera = when (((rotation % 360) + 360) % 360) {
+        val dims = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, dims)
+        val tall = dims.outHeight > dims.outWidth
+        val sideways = sensorTurn % 180 != 0
+        val turn = when {
+            // A sideways sensor gives a wide picture. A tall one was already stood up for an upright phone
+            // (some phones always do that, whichever way the phone is held), so only the rest is left.
+            sideways && tall -> ((wantTurn - sensorTurn) % 360 + 360) % 360
+            // the phone turned a wide picture itself and says nothing more is needed
+            (written == ExifInterface.ORIENTATION_NORMAL || written == ExifInterface.ORIENTATION_UNDEFINED) && rotation == 0 -> 0
+            // pixels exactly as the sensor delivers them
+            else -> wantTurn
+        }
+        val orientation = when (turn) {
             90 -> ExifInterface.ORIENTATION_ROTATE_90
             180 -> ExifInterface.ORIENTATION_ROTATE_180
             270 -> ExifInterface.ORIENTATION_ROTATE_270
             else -> ExifInterface.ORIENTATION_NORMAL
         }
-        // some phones write the orientation into the JPEG, some only tell CameraX
-        val orientation = if (written == ExifInterface.ORIENTATION_UNDEFINED || written == ExifInterface.ORIENTATION_NORMAL) fromCamera else written
 
         if (keepOriginal) {
             if (orientation == written) {

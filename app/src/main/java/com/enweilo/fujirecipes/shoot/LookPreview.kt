@@ -31,15 +31,15 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
         set(v) { field = v; redraw() }
     @Volatile var original = false
         set(v) { field = v; redraw() }
-    /** Shape of the photo; the camera picture is cropped to it. */
-    @Volatile var ratio: Ratio = Ratio.R3x2
+    /** Shape of the photo (short side / long side); the camera picture is cropped to it. */
+    @Volatile var aspect: Float = 2f / 3f
         set(v) { field = v; updateCrop(); redraw() }
     @Volatile private var crop: FloatArray = LookProgram.FULL
     /** short / long side of the camera picture */
     @Volatile private var frame = 3f / 4f
 
     private fun updateCrop() {
-        val target = ratio.short / ratio.long
+        val target = aspect
         crop = if (target < frame) {
             val du = target / frame
             floatArrayOf((1f - du) / 2f, 0f, du, 1f)
@@ -94,6 +94,9 @@ class LookPreview(context: Context, private val store: LutStore) : TextureView(c
         val fyUp = c[1] + (1f - ny) * c[3]
         return fx to (1f - fyUp)
     }
+
+    /** The picture on screen right now (for cross-fades). */
+    fun snapshot(): android.graphics.Bitmap? = runCatching { getBitmap(width / 2, height / 2) }.getOrNull()
 
     fun reloadLut() {
         lutDirty = true
