@@ -98,9 +98,11 @@ class LensScout(private val context: Context) {
             val tag = "相機 $id（${if (id in listed) "公開" else "未公開"}，約 ${eq?.roundToInt() ?: "?"} mm）"
             // keep only cameras made for ordinary photos
             if (CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE !in caps) { notes += "$tag：不是一般拍照用，略過"; continue }
-            if (Build.VERSION.SDK_INT >= 28 && CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MONOCHROME in caps) { notes += "$tag：黑白鏡頭，略過"; continue }
+            val listedCam = id in listed
+            // the phone's own listed cameras are always kept; helper cameras hide among the unlisted ones
+            if (!listedCam && Build.VERSION.SDK_INT >= 28 && CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MONOCHROME in caps) { notes += "$tag：黑白鏡頭，略過"; continue }
             val px = ch.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
-            if (px != null && px.width.toLong() * px.height < 3_000_000L) { notes += "$tag：畫素太低（多半是景深或微距輔助），略過"; continue }
+            if (!listedCam && px != null && px.width.toLong() * px.height < 3_000_000L) { notes += "$tag：畫素太低（多半是景深或微距輔助），略過"; continue }
             if (eq == null) { notes += "$tag：讀不到焦距，略過"; continue }
             val logical = Build.VERSION.SDK_INT >= 28 && CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA in caps
             val zr = if (Build.VERSION.SDK_INT >= 30) ch.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) else null
