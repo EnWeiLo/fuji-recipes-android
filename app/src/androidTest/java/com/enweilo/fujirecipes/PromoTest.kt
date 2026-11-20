@@ -51,7 +51,7 @@ class PromoTest {
     /** Starts screenrecord for [seconds] in the background. */
     private fun record(name: String, seconds: Int) {
         val pfd = inst.uiAutomation.executeShellCommand(
-            "screenrecord --size 720x1600 --bit-rate 16000000 --time-limit $seconds /sdcard/Pictures/rendercheck/rec_$name.mp4",
+            "screenrecord --size 720x1600 --bit-rate 16000000 --time-limit $seconds /data/local/tmp/rec_$name.mp4",
         )
         Thread {
             val text = runCatching { String(android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd).readBytes()) }.getOrElse { it.toString() }
@@ -59,6 +59,8 @@ class PromoTest {
         }.apply { isDaemon = true }.start()
         step("recording $name")
         Thread.sleep(700)
+        val ls = inst.uiAutomation.executeShellCommand("ls -la /data/local/tmp/")
+        step("tmp: " + String(android.os.ParcelFileDescriptor.AutoCloseInputStream(ls).readBytes()).lines().filter { "rec_" in it }.joinToString(" | "))
     }
 
     @Test
