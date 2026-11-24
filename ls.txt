@@ -1,0 +1,8 @@
+ls: /sdcard/Pictures/rendercheck/: No such file or directory
+total 2080
+drwxrwx--x 2 shell shell   4096 2026-11-24 18:28 .
+drwxr-x--x 5 root  root    4096 2026-11-24 18:25 ..
+-rw-rw-r-- 1 shell shell 447966 2026-11-24 18:28 s_bake_0_empty.png
+-rw-rw-r-- 1 shell shell 564958 2026-11-24 18:28 s_bake_1_file.png
+-rw-rw-r-- 1 shell shell 538420 2026-11-24 18:28 s_bake_2_oven.png
+-rw-rw-r-- 1 shell shell 537010 2026-11-24 18:28 s_bake_3_oven.png

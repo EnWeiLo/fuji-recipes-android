@@ -1,0 +1,10 @@
+--------- beginning of main
+11-24 18:28:04.158  2430  2449 I TestRunner: run started: 2 tests
+11-24 18:28:04.161  2430  2449 I TestRunner: started: tab(com.enweilo.fujirecipes.BakeTest)
+11-24 18:28:13.472  2430  2449 I BakeTest: items 1 model X-T50 recipe bk2
+11-24 18:28:16.733  2430  2449 I BakeTest: done
+11-24 18:28:16.733  2430  2449 I TestRunner: finished: tab(com.enweilo.fujirecipes.BakeTest)
+11-24 18:28:17.433  2430  2449 I TestRunner: started: patchWritesTheRightFields(com.enweilo.fujirecipes.BakeTest)
+11-24 18:28:17.446  2430  2449 I BakeTest: patch ok
+11-24 18:28:17.446  2430  2449 I TestRunner: finished: patchWritesTheRightFields(com.enweilo.fujirecipes.BakeTest)
+11-24 18:28:17.448  2430  2449 I TestRunner: run finished: 2 tests, 0 failed, 0 ignored
