@@ -136,11 +136,7 @@ fun MainScreen(c: AppController, listState: LazyListState, pager: PagerState) {
                 "更新",
                 onConfirm = { c.startUpdate() }, onDismiss = { c.dismissUpdatePrompt() },
             )
-            // over the black viewfinder the bar switches to its dark look
-            val nearShoot by remember { derivedStateOf { abs(pos() - Tab.Shoot.ordinal) < 0.5f } }
-            CompositionLocalProvider(LocalPalette provides if (nearShoot) DarkPalette else Pal) {
-                TabBar(c, pager, backdrop, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 24.dp, vertical = 14.dp))
-            }
+            TabBar(c, pager, backdrop, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 24.dp, vertical = 14.dp))
             PickerSheet(sheet, backdrop) { sheet = null }
             val target = c.recipes.firstOrNull { it.id == c.camRecipeId }
             ConfirmDialog(
@@ -162,7 +158,7 @@ fun MainScreen(c: AppController, listState: LazyListState, pager: PagerState) {
                     when (Tab.entries[page]) {
                         Tab.Recipes -> RecipeListTab(c, listState)
                         Tab.Camera -> CameraTab(c, onPickRecipe = { sheet = it }, onAskWrite = { askWrite = true })
-                        Tab.Shoot -> ShootTab(c, active = c.tab == Tab.Shoot && c.stack.isEmpty())
+                        Tab.Bake -> BakeTab(c)
                         Tab.Polaroid -> PolaroidTab(c, onSheet = { sheet = it })
                         Tab.Settings -> SettingsTab(c)
                     }
@@ -196,7 +192,7 @@ private fun TabBar(c: AppController, pager: PagerState, backdrop: Backdrop, modi
             val items = listOf(
                 Triple(Tab.Recipes, Glyph.Recipes, "食譜"),
                 Triple(Tab.Camera, Glyph.Link, "連線"),
-                Triple(Tab.Shoot, Glyph.Camera, "拍照"),
+                Triple(Tab.Bake, Glyph.Oven, "烘焙"),
                 Triple(Tab.Polaroid, Glyph.Polaroid, "拍立得"),
                 Triple(Tab.Settings, Glyph.Gear, "設定"),
             )

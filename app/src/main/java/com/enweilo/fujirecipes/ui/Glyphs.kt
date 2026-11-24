@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.dp
 
 enum class Glyph {
     Plus, Back, Chevron, Check, Close, Search, Edit, Trash, Recipes, Polaroid, Camera, Gear,
-    Link, Flash, FlashOff, Timer, Grid, Level, Flip,
+    Link, Flash, FlashOff, Timer, Grid, Level, Flip, Oven,
 }
 
 @Composable
@@ -95,6 +95,16 @@ fun GlyphView(glyph: Glyph, color: Color, size: Dp = 22.dp, modifier: Modifier =
                 poly(15f to 4f, 17.5f to 6.5f, 15f to 9f)
                 poly(20f to 14f, 17.5f to 17.5f, 6.5f to 17.5f)
                 poly(9f to 20f, 6.5f to 17.5f, 9f to 15f)
+            }
+            Glyph.Oven -> {
+                drawRoundRect(color, topLeft = p(3f, 5f), size = androidx.compose.ui.geometry.Size(18f * s, 14f * s),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(3f * s), style = stroke)
+                line(p(3f, 9f), p(21f, 9f))
+                drawRoundRect(color, topLeft = p(6f, 11.5f), size = androidx.compose.ui.geometry.Size(9f * s, 5f * s),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(1f * s), style = stroke)
+                drawCircle(color, radius = 1.3f * s, center = p(18f, 14f))
+                drawCircle(color, radius = 0.9f * s, center = p(6.5f, 7f))
+                drawCircle(color, radius = 0.9f * s, center = p(9.5f, 7f))
             }
             Glyph.Gear -> {
                 drawCircle(color, radius = 3f * s, center = p(12f, 12f), style = stroke)

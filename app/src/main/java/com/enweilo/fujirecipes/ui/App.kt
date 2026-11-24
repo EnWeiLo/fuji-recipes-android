@@ -47,8 +47,7 @@ fun App(c: AppController) {
     val palette = if (dark) DarkPalette else LightPalette
 
     val view = LocalView.current
-    // the 拍照 tab is black, so it wants light status bar icons
-    val camera = c.tab == com.enweilo.fujirecipes.Tab.Shoot && c.stack.isEmpty()
+    val camera = false
     SideEffect {
         val window = (view.context as? android.app.Activity)?.window
         if (window != null) {

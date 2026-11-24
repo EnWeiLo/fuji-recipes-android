@@ -24,8 +24,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Camera = 連線 (writing recipes to the Fujifilm camera), Shoot = 拍照 (the phone camera). */
-enum class Tab { Recipes, Camera, Shoot, Polaroid, Settings }
+/** Camera = 連線 (writing recipes to the Fujifilm camera), Bake = 烘焙 (the camera develops RAW with a recipe). */
+enum class Tab { Recipes, Camera, Bake, Polaroid, Settings }
 
 sealed interface Screen {
     data class Detail(val id: String) : Screen
@@ -50,8 +50,20 @@ class AppController(private val app: Application) {
     /** The 拍立得 tab keeps its own state (photos, styles, saving). */
     val polaroid = PolaroidController(app, scope) { text -> showToast(text) }
 
-    /** The 拍照 tab: phone camera with recipe looks. */
-    val shoot = com.enweilo.fujirecipes.shoot.ShootController(app, scope, { text -> showToast(text) }) { recipes }
+    /** The 烘焙 tab: the camera develops RAW files with a recipe. */
+    val bake = com.enweilo.fujirecipes.bake.BakeController(
+        app, scope,
+        camera = { cam },
+        cameraModel = { camModel },
+        recipes = { recipes },
+        toast = { showToast(it) },
+        log = { log(it) },
+        useCamera = { block ->
+            while (camBusy) kotlinx.coroutines.delay(100)
+            camBusy = true
+            try { block() } finally { camBusy = false }
+        },
+    )
 
     // ---------------- general state ----------------
 
@@ -382,6 +394,7 @@ class AppController(private val app: Application) {
                 camStatus = CamStatus.Connected
                 log("連線完成。")
                 showToast("相機已連線")
+                bake.showCachedOrBake()
             } catch (e: Exception) {
                 log("失敗：" + (e.message ?: e.toString()))
                 camStatus = CamStatus.Disconnected
@@ -393,6 +406,7 @@ class AppController(private val app: Application) {
     fun disconnectCamera() {
         val c = cam ?: return
         cam = null
+        bake.onCameraGone()
         camStatus = CamStatus.Disconnected
         slotInfos = emptyList()
         scope.launch {
@@ -405,6 +419,7 @@ class AppController(private val app: Application) {
     fun onUsbDetached() {
         if (cam != null) {
             cam = null
+            bake.onCameraGone()
             camStatus = CamStatus.Disconnected
             slotInfos = emptyList()
             log("相機已拔除。")

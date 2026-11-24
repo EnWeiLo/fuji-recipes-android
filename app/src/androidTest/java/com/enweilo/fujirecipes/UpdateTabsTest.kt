@@ -45,7 +45,7 @@ class UpdateTabsTest {
                 Thread.sleep(1500)
                 shot(inst, "tabs_01_recipes")
                 // order of the bar, left to right
-                val xs = listOf("食譜", "連線", "拍照", "拍立得", "設定").map { dev.findObject(By.text(it))?.visibleBounds?.centerX() ?: -1 }
+                val xs = listOf("食譜", "連線", "烘焙", "拍立得", "設定").map { dev.findObject(By.text(it))?.visibleBounds?.centerX() ?: -1 }
                 assertTrue("tab order wrong: $xs", xs.all { it >= 0 } && xs == xs.sorted())
 
                 dev.findObject(By.text("連線"))?.click()
