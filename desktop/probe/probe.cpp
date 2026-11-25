@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <chrono>
 #include <thread>
+#include "usbptp.h"
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "PortableDeviceGUIDs.lib")
@@ -545,12 +546,129 @@ static int run(int argc, wchar_t** argv) {
     return 0;
 }
 
+
+static void zadigSteps() {
+    say("");
+    say("換驅動步驟（只要做一次）：");
+    say("  1. 相機設成 USB RAW CONV./BACKUP RESTORE，接上電腦。");
+    say("  2. 到 https://zadig.akeo.ie 下載 Zadig，執行它（免安裝）。");
+    say("  3. 選單 Options → 勾 List All Devices。");
+    say("  4. 上面的下拉選單選 X-T50（USB ID 要是 04CB 0306）。");
+    say("  5. 右邊目標驅動選 WinUSB，按 Replace Driver（或 Install Driver），等它跑完。");
+    say("  6. 拔掉相機重插，再執行一次這個程式。");
+    say("  想換回原本的：裝置管理員 → 找到 X-T50 → 解除安裝裝置（勾刪除驅動），重插就恢復。");
+}
+
+static int runUsb(int argc, wchar_t** argv) {
+    say("==== 富士食堂 USB 測試（直接連線版）====");
+    say("相機請先設定：連線模式 → USB RAW CONV./BACKUP RESTORE，再用 USB 線接電腦。");
+    say("");
+    UsbPtp u;
+    if (!u.open()) {
+        say("[1] 連不上：%s", u.why.c_str());
+        if (u.why.find("沒有富士") == std::string::npos) zadigSteps();
+        return 1;
+    }
+    say("[1] 相機已直接連上（USB ID 04CB %04X）", u.pid);
+    auto s = u.cmd(0x1002, {1});
+    if (!s.ok) { say("[失敗] 開啟連線沒有回應：%s", s.err.c_str()); return 2; }
+    if (s.code != 0x2001 && s.code != 0x201E) say("    開啟連線回應 %04X（繼續試）", s.code);
+    auto info = u.cmd(0x1001, {});
+    if (!info.ok || info.data.size() < 12) { say("[失敗] 讀相機資訊：%s", info.err.c_str()); return 3; }
+    size_t off = 8;
+    ptpString(info.data, off);
+    off += 2;
+    auto ops = ptpU16Array(info.data, off);
+    ptpU16Array(info.data, off);
+    auto props = ptpU16Array(info.data, off);
+    ptpU16Array(info.data, off);
+    ptpU16Array(info.data, off);
+    std::string maker = ptpString(info.data, off);
+    std::string model = ptpString(info.data, off);
+    std::string ver = ptpString(info.data, off);
+    say("[2] 相機：%s %s（韌體 %s），支援 %zu 個指令、%zu 個屬性", maker.c_str(), model.c_str(), ver.c_str(), ops.size(), props.size());
+    say("    RAW 上傳指令（900C/900D）：%s", has(ops, 0x900C) && has(ops, 0x900D) ? "有" : "沒有");
+
+    std::wstring rafPath = findRaf(argc, argv);
+    if (rafPath.empty()) {
+        say("");
+        say("[成功] 電腦可以直接跟相機溝通了！");
+        say("[3] 沒有找到 .RAF，跳過「真的烘一張」。想測完整流程：把一個 %s 拍的 .RAF 放在程式旁邊（或拖到程式圖示上）再執行一次。", model.c_str());
+        u.cmd(0x1003, {});
+        return 0;
+    }
+    std::vector<uint8_t> raf;
+    if (!readFile(rafPath, raf) || raf.size() < 100 || memcmp(raf.data(), "FUJIFILMCCD-RAW", 15) != 0) {
+        say("[3] %s 不是富士 RAW，跳過。", narrow(rafPath).c_str());
+        return 0;
+    }
+    char rafModel[33] = {0};
+    memcpy(rafModel, raf.data() + 0x1C, 32);
+    say("");
+    say("[3] 烘焙測試：%s（%.1f MB，%s 拍的）", narrow(rafPath).c_str(), raf.size() / 1048576.0, rafModel);
+    for (int i = 0; i < 4; i++) {
+        auto hs = u.cmd(0x1007, {0xFFFFFFFF, 0, 0});
+        if (!hs.ok || hs.data.size() < 8 || !UsbPtp::get32(hs.data.data())) break;
+        u.cmd(0x100B, {UsbPtp::get32(hs.data.data() + 4)});
+    }
+    std::vector<uint8_t> oi;
+    UsbPtp::put32(oi, 0); UsbPtp::put16(oi, 0xF802); UsbPtp::put16(oi, 0); UsbPtp::put32(oi, (uint32_t)raf.size());
+    UsbPtp::put16(oi, 0); UsbPtp::put32(oi, 0); UsbPtp::put32(oi, 0); UsbPtp::put32(oi, 0);
+    UsbPtp::put32(oi, 0); UsbPtp::put32(oi, 0); UsbPtp::put32(oi, 0); UsbPtp::put32(oi, 0);
+    UsbPtp::put16(oi, 0); UsbPtp::put32(oi, 0); UsbPtp::put32(oi, 0);
+    auto nm = ptpStr(L"FUP_FILE.dat");
+    oi.insert(oi.end(), nm.begin(), nm.end());
+    oi.push_back(0); oi.push_back(0); oi.push_back(0);
+    auto r1 = u.cmd(0x900C, {0, 0, 0}, &oi);
+    say("    送檔案資訊：%s（回應 %04X）", r1.ok ? "OK" : r1.err.c_str(), r1.code);
+    if (!r1.ok || r1.code != 0x2001) { say("[失敗] 相機不收 RAW 資訊。"); return 4; }
+    say("    傳送 RAW…");
+    auto t0 = std::chrono::steady_clock::now();
+    auto r2 = u.cmd(0x900D, {}, &raf, [](uint64_t d, uint64_t t) { bar(d, t); }, 60000);
+    double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    say("    傳送 RAW：%s（回應 %04X），%.1f 秒，%.1f MB/s", r2.ok ? "OK" : r2.err.c_str(), r2.code, secs, raf.size() / 1048576.0 / secs);
+    if (!r2.ok || r2.code != 0x2001) { say("[失敗] RAW 傳送失敗。"); return 5; }
+    auto base = u.cmd(0x1015, {0xD185});
+    say("    讀這張的轉檔設定：%s（回應 %04X，%zu bytes）", base.ok ? "OK" : base.err.c_str(), base.code, base.data.size());
+    if (base.data.size() < 100) { say("[失敗] 讀不到轉檔設定。"); return 6; }
+    auto r3 = u.cmd(0x1016, {0xD185}, &base.data);
+    say("    寫回轉檔設定：%s（回應 %04X）", r3.ok ? "OK" : r3.err.c_str(), r3.code);
+    std::vector<uint8_t> zero = {0, 0};
+    auto t1 = std::chrono::steady_clock::now();
+    auto r4 = u.cmd(0x1016, {0xD183}, &zero);
+    say("    開始烘焙：%s（回應 %04X）", r4.ok ? "OK" : r4.err.c_str(), r4.code);
+    if (!r4.ok || r4.code != 0x2001) { say("[失敗] 相機沒有開始烘焙。"); return 7; }
+    uint32_t handle = 0;
+    for (int i = 0; i < 150 && !handle; i++) {
+        auto hs = u.cmd(0x1007, {0xFFFFFFFF, 0, 0});
+        if (hs.ok && hs.data.size() >= 8 && UsbPtp::get32(hs.data.data())) handle = UsbPtp::get32(hs.data.data() + 4);
+        else std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    }
+    double bakeSecs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count();
+    if (!handle) { say("[失敗] 等了一分鐘相機都沒烘好。"); return 8; }
+    say("    烘好了（%.1f 秒），取回中…", bakeSecs);
+    auto t2 = std::chrono::steady_clock::now();
+    auto jpg = u.cmd(0x1009, {handle}, nullptr, [](uint64_t d, uint64_t t) { bar(d, t); }, 60000);
+    double getSecs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t2).count();
+    u.cmd(0x100B, {handle});
+    if (!jpg.ok || jpg.data.size() < 1000) { say("[失敗] 取回成品失敗：%s", jpg.err.c_str()); return 9; }
+    std::wstring outPath = exeDir() + L"烘焙測試.jpg";
+    FILE* f = _wfopen(outPath.c_str(), L"wb");
+    if (f) { fwrite(jpg.data.data(), 1, jpg.data.size(), f); fclose(f); }
+    say("    成品 %.1f MB（取回 %.1f 秒），存在：%s", jpg.data.size() / 1048576.0, getSecs, narrow(outPath).c_str());
+    u.cmd(0x1003, {});
+    say("");
+    say("[成功] 整套烘焙在 Windows 上走得通！");
+    return 0;
+}
+
 int wmain(int argc, wchar_t** argv) {
     SetConsoleOutputCP(CP_UTF8);
     g_log = _wfopen((exeDir() + L"富士食堂USB測試結果.txt").c_str(), L"wb");
     if (g_log) fputs("\xEF\xBB\xBF", g_log);
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    int rc = run(argc, argv);
+    int rc = runUsb(argc, argv);
+    (void)run;
     say("");
     say("結果也存在旁邊的「富士食堂USB測試結果.txt」，把它傳給 Claude 就好。按 Enter 結束。");
     if (g_log) fclose(g_log);

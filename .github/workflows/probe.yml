@@ -17,11 +17,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
+      - name: libusb
+        shell: cmd
+        run: vcpkg install libusb:x64-windows-static
       - name: Build
         shell: cmd
         run: |
           cd desktop\probe
-          cl /nologo /EHsc /utf-8 /O2 /MT /W3 probe.cpp ole32.lib PortableDeviceGUIDs.lib /link /OUT:FujiUsbProbe.exe
+          set V=%VCPKG_INSTALLATION_ROOT%\installed\x64-windows-static
+          cl /nologo /EHsc /utf-8 /O2 /MT /W3 /I"%V%\include\libusb-1.0" probe.cpp "%V%\lib\libusb-1.0.lib" ole32.lib PortableDeviceGUIDs.lib advapi32.lib setupapi.lib /link /OUT:FujiUsbProbe.exe
       - uses: actions/upload-artifact@v4
         with:
           name: FujiUsbProbe
