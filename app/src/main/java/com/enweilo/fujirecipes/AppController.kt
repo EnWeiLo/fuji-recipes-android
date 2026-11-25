@@ -99,7 +99,39 @@ class AppController(private val app: Application) {
         prefs.edit().putInt("theme", mode).apply()
     }
 
-    private fun persist() = store.save(recipes)
+    private fun persist() {
+        store.save(recipes)
+        pcSync.soon()
+    }
+
+    // ---------------- sync with the computer ----------------
+
+    /** Recipes deleted here, so the computer deletes them too (id → when). */
+    private var tombstones: Map<String, Long> = runCatching {
+        val o = org.json.JSONObject(prefs.getString("tombs", "{}") ?: "{}")
+        o.keys().asSequence().associateWith { o.getLong(it) }
+    }.getOrElse { emptyMap() }
+
+    private fun saveTombs() {
+        val o = org.json.JSONObject()
+        tombstones.forEach { (k, v) -> o.put(k, v) }
+        prefs.edit().putString("tombs", o.toString()).apply()
+    }
+
+    val pcSync = com.enweilo.fujirecipes.sync.PcSync(
+        app, scope,
+        local = { recipes to tombstones },
+        apply = { list, tombs ->
+            val keep = list.map { it.id }.toSet()
+            recipes.filter { it.id !in keep }.forEach { gone -> gone.photos.forEach { store.deletePhoto(it) } }
+            recipes = list
+            tombstones = tombs
+            store.save(recipes)
+            saveTombs()
+            if (stack.any { s -> (s as? Screen.Detail)?.id?.let { it !in keep } == true }) stack.clear()
+        },
+        toast = { showToast(it) },
+    )
 
     // ---------------- updates ----------------
 
@@ -126,6 +158,7 @@ class AppController(private val app: Application) {
 
     /** The app came to the front: check again if the last look was more than 30 minutes ago. */
     fun onForeground() {
+        pcSync.onForeground()
         if (System.currentTimeMillis() - lastCheckAt > 30 * 60_000L) checkForUpdate(manual = false)
     }
 
@@ -278,6 +311,8 @@ class AppController(private val app: Application) {
         val recipe = recipes.firstOrNull { it.id == id } ?: return
         recipe.photos.forEach { store.deletePhoto(it) }
         recipes = recipes.filter { it.id != id }
+        tombstones = tombstones + (id to System.currentTimeMillis())
+        saveTombs()
         persist()
         stack.clear()
         showToast("已刪除")

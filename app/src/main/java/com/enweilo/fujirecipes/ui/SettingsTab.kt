@@ -1,5 +1,7 @@
 package com.enweilo.fujirecipes.ui
 
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -73,6 +75,9 @@ fun SettingsTab(c: AppController) {
             }
         }
 
+        item { SectionLabel("和電腦同步") }
+        item { PcSyncPanel(c) }
+
         item { SectionLabel("資料") }
         item {
             Panel {
@@ -90,6 +95,51 @@ fun SettingsTab(c: AppController) {
                 ValueRow("名稱", "富士食堂"); Divider()
                 ValueRow("版本", version); Divider()
                 ValueRow("資料位置", "只存在這支手機")
+            }
+        }
+    }
+}
+
+@androidx.compose.runtime.Composable
+private fun PcSyncPanel(c: com.enweilo.fujirecipes.AppController) {
+    val p = Pal
+    val sync = c.pcSync
+    var pairing by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<com.enweilo.fujirecipes.sync.FoundPc?>(null) }
+    var code by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+    var manual by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+    Panel {
+        Column(Modifier.padding(16.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
+            if (sync.paired) {
+                ValueRow("電腦", sync.pcName)
+                Divider()
+                ValueRow("上次同步", if (sync.lastSync > 0) java.text.SimpleDateFormat("M/d HH:mm").format(java.util.Date(sync.lastSync)) else "還沒有")
+                if (sync.status.isNotEmpty()) Txt(sync.status, 12, color = p.sub)
+                Divider()
+                ToggleRow("自動同步", sync.auto) { sync.changeAuto(it) }
+                SoftButton(if (sync.busy) "同步中…" else "立即同步", { sync.syncNow(quiet = false) }, enabled = !sync.busy)
+                SoftButton("取消配對", { sync.unpair() }, danger = true)
+            } else {
+                val target = pairing
+                if (target == null) {
+                    Txt("電腦版富士食堂開著、在同一個 Wi-Fi 下，就能互相同步食譜。", 13, color = p.sub)
+                    SoftButton(if (sync.searching) "尋找中…" else "尋找電腦", { sync.search() }, enabled = !sync.searching)
+                    sync.found.forEach { pc ->
+                        SoftButton("${pc.name}（${pc.host}）", { pairing = pc; code = "" })
+                    }
+                    if (!sync.searching && sync.found.isEmpty()) {
+                        Txt("找不到時，輸入電腦的 IP（電腦版「連線與同步」頁有寫）", 12, color = p.sub)
+                        Field(manual, { manual = it }, "例如 192.168.1.20")
+                        if (manual.isNotBlank()) SoftButton("用這個 IP", {
+                            pairing = com.enweilo.fujirecipes.sync.FoundPc(manual.trim(), manual.trim(), com.enweilo.fujirecipes.data.RecipeSync.HTTP_PORT)
+                            code = ""
+                        })
+                    }
+                } else {
+                    Txt("輸入 ${target.name} 上「連線與同步」頁顯示的 6 位數配對碼", 13, color = p.sub)
+                    Field(code, { code = it.filter { ch -> ch.isDigit() }.take(6) }, "配對碼", number = true)
+                    SoftButton(if (sync.busy) "配對中…" else "配對", { sync.pair(target, code) { ok -> if (ok) pairing = null } }, enabled = code.length == 6 && !sync.busy)
+                    SoftButton("取消", { pairing = null })
+                }
             }
         }
     }

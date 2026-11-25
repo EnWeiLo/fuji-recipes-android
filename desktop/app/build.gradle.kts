@@ -65,3 +65,4 @@ tasks.register<JavaExec>("renderPreview") {
     args = listOf(layout.buildDirectory.dir("preview").get().asFile.absolutePath) + (project.findProperty("rafDir")?.toString()?.let { listOf(it) } ?: emptyList())
     jvmArgs("-Djava.awt.headless=true")
 }
+
