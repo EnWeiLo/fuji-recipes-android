@@ -339,16 +339,43 @@ static int run(int argc, wchar_t** argv) {
     client->SetUnsignedIntegerValue(WPD_CLIENT_MINOR_VERSION, 0);
     client->SetUnsignedIntegerValue(WPD_CLIENT_REVISION, 0);
     client->SetUnsignedIntegerValue(WPD_CLIENT_DESIRED_ACCESS, GENERIC_READ | GENERIC_WRITE);
+    client->SetUnsignedIntegerValue(WPD_CLIENT_SHARE_MODE, FILE_SHARE_READ | FILE_SHARE_WRITE);
     h = ptp.dev->Open(ids[pick], client);
     client->Release();
     if (FAILED(h)) { say("[失敗] 打不開相機（%s）。是不是有別的程式（X RAW STUDIO、相片匯入）正在用？", hr(h).c_str()); return 3; }
     say("[2] 相機已打開");
 
-    // ---- device info
-    auto info = ptp.read(0x1001, {});
+    // ---- does Windows itself talk to it? (its own property read, no PTP from us)
+    {
+        IPortableDeviceContent* content = nullptr;
+        IPortableDeviceProperties* pr = nullptr;
+        IPortableDeviceValues* vals = nullptr;
+        if (SUCCEEDED(ptp.dev->Content(&content)) && SUCCEEDED(content->Properties(&pr))) {
+            HRESULT hp = pr->GetValues(WPD_DEVICE_OBJECT_ID, nullptr, &vals);
+            LPWSTR fw = nullptr;
+            if (SUCCEEDED(hp) && vals) vals->GetStringValue(WPD_DEVICE_FIRMWARE_VERSION, &fw);
+            say("    Windows 自己讀相機資訊：%s%s%s", SUCCEEDED(hp) ? "OK" : hr(hp).c_str(),
+                fw ? "，韌體 " : "", fw ? narrow(fw).c_str() : "");
+            if (fw) CoTaskMemFree(fw);
+        }
+        if (vals) vals->Release();
+        if (pr) pr->Release();
+        if (content) content->Release();
+    }
+
+    // ---- device info (retry: right after plugging in, Windows keeps the camera busy for a while)
+    Ptp::Result info;
+    for (int attempt = 1; attempt <= 15; attempt++) {
+        info = ptp.read(0x1001, {});
+        if (SUCCEEDED(info.hr) && info.data.size() >= 12) break;
+        say("    第 %d 次送指令：%s%s", attempt, hr(info.hr).c_str(),
+            info.hr == HRESULT_FROM_WIN32(ERROR_BUSY) ? "（相機忙碌中，2 秒後再試）" : "");
+        if (attempt == 1 && info.hr == HRESULT_FROM_WIN32(ERROR_BUSY))
+            say("    → 如果一直忙碌：關掉 X RAW STUDIO、相片 App、正在顯示相機的檔案總管視窗，或拔掉重插。");
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
     if (FAILED(info.hr) || info.data.size() < 12) {
-        say("[失敗] Windows 不讓我們送 PTP 指令（%s，回應 %04X）。", hr(info.hr).c_str(), info.code);
-        say("      → 不換驅動的路走不通，之後要改用 Zadig 換驅動的方式。");
+        say("[失敗] PTP 指令一直送不出去（%s，回應 %04X）。", hr(info.hr).c_str(), info.code);
         return 4;
     }
     size_t off = 8;  // StandardVersion(2) VendorExtensionID(4) VendorExtensionVersion(2)
