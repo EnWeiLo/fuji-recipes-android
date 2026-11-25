@@ -6,6 +6,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#define _CRT_SECURE_NO_WARNINGS
 #include <algorithm>
 #include <cstdarg>
 #include <cstring>
@@ -13,6 +14,7 @@
 #include <objbase.h>
 #include <PortableDeviceApi.h>
 #include <PortableDevice.h>
+#include <WpdMtpExtensions.h>
 #include <string>
 #include <vector>
 #include <cstdio>
