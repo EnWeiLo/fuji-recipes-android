@@ -89,6 +89,6 @@ class FujiUsb(context: Context) {
         if (usbInterface.alternateSetting != 0) {
             try { connection.setInterface(usbInterface) } catch (_: Exception) {}
         }
-        return PtpCam(connection, usbInterface, epIn, epOut, device.productName ?: "Fujifilm")
+        return UsbPtpCam(connection, usbInterface, epIn, epOut, device.productName ?: "Fujifilm")
     }
 }

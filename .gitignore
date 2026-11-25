@@ -7,3 +7,7 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+desktop/app/build/
+desktop/app/.gradle/
+desktop/app/.kotlin/
+desktop/app/resources/windows/libusb-1.0.dll

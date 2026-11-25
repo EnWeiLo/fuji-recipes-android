@@ -3,6 +3,8 @@ package com.enweilo.fujirecipes.camera
 import com.enweilo.fujirecipes.data.Recipe
 import com.enweilo.fujirecipes.data.Tables
 import com.enweilo.fujirecipes.data.codeOf
+import com.enweilo.fujirecipes.data.emptyRecipe
+import com.enweilo.fujirecipes.data.labelOf
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.roundToInt
@@ -170,6 +172,43 @@ class FujiBaker(private val cam: PtpCam, private val log: (String) -> Unit) {
             r.nr.replace("+", "").toIntOrNull()?.let { v -> Tables.NR_ENCODE[v]?.let { set(NR, it) } }
             set(CLARITY, tenths(r.clarity))
             return out
+        }
+
+        /** The other way round: what a RAF was shot with, as a recipe (from the profile the camera reports). */
+        fun recipeFromProfile(profile: ByteArray, name: String): Recipe {
+            val bb = ByteBuffer.wrap(profile).order(ByteOrder.LITTLE_ENDIAN)
+            val n = bb.getShort(0).toInt() and 0xFFFF
+            val off = profile.size - n * 4
+            fun get(idx: Int): Int? = if (idx < n && off >= 2 && off + idx * 4 + 4 <= profile.size) bb.getInt(off + idx * 4) else null
+            fun tone(v: Int?): String {
+                if (v == null) return "0"
+                val x = v / 10f
+                val t = if (x == x.toInt().toFloat()) x.toInt().toString() else x.toString()
+                return if (x > 0) "+$t" else t
+            }
+            fun signed(v: Int?) = if (v == null) "0" else if (v > 0) "+$v" else "$v"
+            val base = emptyRecipe()
+            val wb = get(WB)?.let { Tables.WB.labelOf(it) } ?: base.wb
+            return base.copy(
+                name = name,
+                notes = "從 RAW 檔讀出的拍攝設定",
+                filmSim = get(FILM)?.let { Tables.FILM.labelOf(it) } ?: base.filmSim,
+                dr = get(DYNAMIC_RANGE)?.let { Tables.DR.labelOf(it) } ?: "自動",
+                grain = get(GRAIN)?.let { Tables.GRAIN.labelOf(it) } ?: base.grain,
+                colorChrome = get(CHROME)?.let { Tables.FX.labelOf(it) } ?: base.colorChrome,
+                colorChromeBlue = get(CHROME_BLUE)?.let { Tables.FX.labelOf(it) } ?: base.colorChromeBlue,
+                wb = wb,
+                kelvin = get(KELVIN)?.takeIf { it in 2500..10000 }?.toString() ?: base.kelvin,
+                shiftR = signed(get(SHIFT_R)),
+                shiftB = signed(get(SHIFT_B)),
+                highlight = tone(get(HIGHLIGHT)),
+                shadow = tone(get(SHADOW)),
+                color = tone(get(COLOR)),
+                sharpness = tone(get(SHARPNESS)),
+                nr = get(NR)?.let { Tables.NR_DECODE[it] }?.let { if (it > 0) "+$it" else "$it" } ?: base.nr,
+                clarity = tone(get(CLARITY)),
+                ev = "",
+            )
         }
 
         private fun ptpStringBytes(s: String): ByteArray {

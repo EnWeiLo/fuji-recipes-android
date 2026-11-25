@@ -1,0 +1,71 @@
+name: Desktop (Windows)
+
+on:
+  push:
+    branches: [main, desktop]
+    paths:
+      - "desktop/app/**"
+      - "app/src/main/java/com/enweilo/fujirecipes/data/Recipe.kt"
+      - "app/src/main/java/com/enweilo/fujirecipes/data/Tables.kt"
+      - "app/src/main/java/com/enweilo/fujirecipes/data/RecipeSync.kt"
+      - "app/src/main/java/com/enweilo/fujirecipes/camera/PtpCore.kt"
+      - "app/src/main/java/com/enweilo/fujirecipes/camera/FujiOps.kt"
+      - "app/src/main/java/com/enweilo/fujirecipes/camera/RawBake.kt"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: libusb
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url=$(gh api repos/libusb/libusb/releases/latest --jq '.assets[] | select(.name | endswith(".7z")) | .browser_download_url' | head -1)
+          echo "libusb: $url"
+          curl -sSL "$url" -o libusb.7z
+          7z x -olibusb libusb.7z > /dev/null
+          dll=$(find libusb -ipath '*MinGW64*' -iname 'libusb-1.0.dll' | head -1)
+          if [ -z "$dll" ]; then dll=$(find libusb -ipath '*x64*' -iname 'libusb-1.0.dll' | head -1); fi
+          echo "using $dll"
+          mkdir -p desktop/app/resources/windows
+          cp "$dll" desktop/app/resources/windows/libusb-1.0.dll
+      - name: Build
+        shell: bash
+        run: |
+          echo "${{ github.run_number }}" > desktop/app/src/main/resources/build.txt
+          cd desktop/app
+          ./gradlew --no-daemon createDistributable
+          cd build/compose/binaries/main/app
+          7z a -tzip ../../../../../FujiShokudo-windows.zip FujiShokudo > /dev/null
+          cd ../../../../..
+          ls -la FujiShokudo-windows.zip
+          echo "{\"build\": ${{ github.run_number }}}" > version.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FujiShokudo-windows
+          path: desktop/app/FujiShokudo-windows.zip
+      # pre-release, so it never becomes the repo's "latest" release the Android app reads
+      - name: Publish
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd desktop/app
+          gh release delete desktop-latest --yes --cleanup-tag || true
+          gh release create desktop-latest FujiShokudo-windows.zip version.json --prerelease \
+            --target ${{ github.sha }} \
+            --title "富士食堂 電腦版（build ${{ github.run_number }}）" \
+            --notes "解壓縮後執行 FujiShokudo\\FujiShokudo.exe。第一次用相機前，要用 Zadig 把相機 USB RAW CONV. 模式的驅動換成 WinUSB（步驟在 App 的「連線與同步」頁）。"
