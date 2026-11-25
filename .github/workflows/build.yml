@@ -5,6 +5,11 @@ on:
     branches: [main, polaroid-tab]
   workflow_dispatch:
 
+# one release update at a time (the phone and desktop builds both publish)
+concurrency:
+  group: publish-releases
+  cancel-in-progress: false
+
 permissions:
   contents: write
 

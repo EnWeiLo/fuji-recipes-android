@@ -112,6 +112,7 @@ fun BakeScreen(app: AppState) {
                             }
                         }
                     }
+                    Chip(if (b.autoBake) "點選就自動烘：開" else "點選就自動烘：關", b.autoBake) { b.changeAutoBake(!b.autoBake) }
                     Spacer(Modifier.weight(1f))
                     b.current?.let { Txt("${it.file.name} · ${it.model} · ${"%.1f".format(it.file.length() / 1048576f)} MB", 12, color = C.dim, maxLines = 1) }
                 }
@@ -209,7 +210,8 @@ private fun Viewer(app: AppState, modifier: Modifier) {
         }
         val msg = b.mismatch() ?: b.error ?: when {
             b.result != null || b.stage >= 0 -> null
-            app.camera.state != CamState.Connected -> "接上相機（USB RAW CONV. 模式）就會自動烘焙"
+            app.camera.state != CamState.Connected -> "接上相機（USB RAW CONV. 模式）就能烘焙"
+            !b.autoBake -> "按右邊「烘焙這張」，或按 Enter"
             b.batchRunning -> "批次進行中，結束後再顯示"
             else -> null
         }
@@ -326,7 +328,12 @@ private fun RecipeSide(app: AppState, modifier: Modifier) {
                 Txt(r.name.ifEmpty { "未命名" }, 15, FontWeight.Medium, maxLines = 1)
                 RecipeFacts(r, 2)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Btn("存成 JPG", { b.save() }, Modifier.weight(1f), primary = true, enabled = b.result != null)
+                    if (b.result == null) {
+                        Btn(if (b.stage >= 0) "烘焙中…" else "烘焙這張", { b.bake() }, Modifier.weight(1f), primary = true,
+                            enabled = b.stage < 0 && app.camera.state == CamState.Connected && b.current != null)
+                    } else {
+                        Btn("存成 JPG", { b.save() }, Modifier.weight(1f), primary = true)
+                    }
                     Btn("做成拍立得", {
                         b.save { f -> if (f != null) { app.polaroid.addFiles(listOf(f)); app.screen = Screen.Polaroid } }
                     }, Modifier.weight(1f), enabled = b.result != null)

@@ -148,11 +148,19 @@ class BakeModel(
         baked = files.filter { cacheFile(it.file, r).exists() }.map { it.file.absolutePath }.toSet()
     }
 
+    var autoBake by mutableStateOf(settings.bool("autoBake", true))
+        private set
+
+    fun changeAutoBake(on: Boolean) {
+        autoBake = on
+        settings.put("autoBake", on)
+        if (on) showCachedOrBake()
+    }
+
     fun mismatch(): String? {
         val rf = current ?: return null
         if (camera.state != CamState.Connected) return null
-        fun n(s: String) = s.uppercase().replace("FUJIFILM", "").filter { it.isLetterOrDigit() }
-        return if (n(rf.model) == n(camera.model)) null else "這張是 ${rf.model} 拍的，接著的是 ${camera.model}：相機只能烘自己型號的 RAW"
+        return if (!mismatch(rf)) null else "這張是 ${rf.model} 拍的，接著的是 ${camera.model}：相機只能烘自己型號的 RAW"
     }
 
     fun showCachedOrBake() {
@@ -167,7 +175,7 @@ class BakeModel(
             return
         }
         result = null
-        if (camera.state != CamState.Connected || mismatch() != null || batchRunning) return
+        if (camera.state != CamState.Connected || mismatch() != null || batchRunning || !autoBake) return
         bake()
     }
 
@@ -309,9 +317,12 @@ class BakeModel(
         }
     }
 
+    /** Only when both names are known: an unreadable camera name never blocks (the camera itself refuses a wrong RAW). */
     private fun mismatch(rf: RawFile): Boolean {
         fun n(s: String) = s.uppercase().replace("FUJIFILM", "").filter { it.isLetterOrDigit() }
-        return n(rf.model) != n(camera.model)
+        val a = n(rf.model)
+        val b = n(camera.model)
+        return a.isNotEmpty() && b.isNotEmpty() && a != b
     }
 
     /** The settings a RAF was shot with, read through the camera, as a new recipe. */

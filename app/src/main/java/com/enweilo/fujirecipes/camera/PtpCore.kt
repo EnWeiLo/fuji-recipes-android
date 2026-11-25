@@ -148,8 +148,9 @@ internal class PtpReader(bytes: ByteArray) {
         return sb.toString()
     }
 
+    /** PTP arrays: a 32-bit count, then the 16-bit items. */
     fun u16Array(): List<Int> {
-        val n = u16()
+        val n = u32().toInt()
         val out = mutableListOf<Int>()
         var i = 0
         while (i < n && left() >= 2) {

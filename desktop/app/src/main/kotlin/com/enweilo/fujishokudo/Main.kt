@@ -162,6 +162,7 @@ private fun handleKey(app: AppState, e: androidx.compose.ui.input.key.KeyEvent):
     when (e.key) {
         Key.DirectionRight -> app.bake.next()
         Key.DirectionLeft -> app.bake.prev()
+        Key.Enter -> app.bake.bake()
         Key.One -> app.bake.chooseRecipeAt(0)
         Key.Two -> app.bake.chooseRecipeAt(1)
         Key.Three -> app.bake.chooseRecipeAt(2)
