@@ -1,0 +1,39 @@
+name: USB probe (Windows)
+
+on:
+  push:
+    branches: [desktop]
+    paths:
+      - "desktop/probe/**"
+      - ".github/workflows/probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build
+        shell: cmd
+        run: |
+          cd desktop\probe
+          cl /nologo /EHsc /utf-8 /O2 /MT /W3 probe.cpp ole32.lib PortableDeviceGUIDs.lib /link /OUT:FujiUsbProbe.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FujiUsbProbe
+          path: desktop/probe/FujiUsbProbe.exe
+      # a pre-release, so it never becomes the repo's "latest" release the Android app reads
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release delete usb-probe --yes --cleanup-tag || true
+          gh release create usb-probe desktop/probe/FujiUsbProbe.exe --prerelease \
+            --target ${{ github.sha }} \
+            --title "富士食堂 USB 測試小程式" \
+            --notes "測試 Windows 能不能直接跟富士相機溝通（RAW 轉檔）。"
