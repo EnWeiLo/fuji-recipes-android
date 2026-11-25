@@ -363,19 +363,83 @@ static int run(int argc, wchar_t** argv) {
         if (content) content->Release();
     }
 
+    // ---- which commands does Windows' driver let through?
+    {
+        IPortableDeviceValues* in = ptp.newValues();
+        ptp.simpleCmd(WPD_COMMAND_MTP_EXT_GET_SUPPORTED_VENDOR_OPCODES, in);
+        IPortableDeviceValues* out = nullptr;
+        HRESULT hv = ptp.send(in, &out);
+        in->Release();
+        std::string list;
+        if (SUCCEEDED(hv) && out) {
+            IPortableDevicePropVariantCollection* c = nullptr;
+            if (SUCCEEDED(out->GetIPortableDevicePropVariantCollectionValue(WPD_PROPERTY_MTP_EXT_VENDOR_OPERATION_CODES, &c)) && c) {
+                DWORD n = 0;
+                c->GetCount(&n);
+                for (DWORD i = 0; i < n; i++) {
+                    PROPVARIANT pv;
+                    PropVariantInit(&pv);
+                    c->GetAt(i, &pv);
+                    char b2[16];
+                    snprintf(b2, sizeof b2, "%04lX ", (unsigned long)pv.ulVal);
+                    list += b2;
+                    PropVariantClear(&pv);
+                }
+                c->Release();
+            }
+        }
+        if (out) out->Release();
+        say("    驅動允許的富士專用指令：%s%s", SUCCEEDED(hv) ? "" : hr(hv).c_str(), list.empty() ? "（沒有）" : list.c_str());
+    }
+    auto tryRead = [&](const char* what, uint16_t op, std::vector<uint32_t> params) {
+        auto r = ptp.read(op, params);
+        say("    試 %s（%04X）：%s，回應 %04X，%zu bytes", what, op, SUCCEEDED(r.hr) ? "OK" : hr(r.hr).c_str(), r.code, r.data.size());
+        return r;
+    };
+    auto tryNoData = [&](const char* what, uint16_t op, std::vector<uint32_t> params) {
+        auto r = ptp.noData(op, params);
+        say("    試 %s（%04X，無資料）：%s，回應 %04X", what, op, SUCCEEDED(r.hr) ? "OK" : hr(r.hr).c_str(), r.code);
+        return r;
+    };
+    tryRead("讀轉檔設定 D185", 0x1015, {0xD185});
+    tryRead("讀屬性說明 D185", 0x1014, {0xD185});
+    tryRead("物件清單", 0x1007, {0xFFFFFFFF, 0, 0});
+    tryRead("儲存空間", 0x1004, {});
+    tryNoData("刪除不存在的物件", 0x100B, {0x7FFFFFFF});
+    // Windows' own object listing (another way to fetch the baked JPEG)
+    {
+        IPortableDeviceContent* content = nullptr;
+        IEnumPortableDeviceObjectIDs* en = nullptr;
+        ULONG total = 0;
+        HRESULT he = ptp.dev->Content(&content);
+        if (SUCCEEDED(he)) he = content->EnumObjects(0, WPD_DEVICE_OBJECT_ID, nullptr, &en);
+        if (SUCCEEDED(he) && en) {
+            LPWSTR idv[16];
+            ULONG got = 0;
+            while (SUCCEEDED(en->Next(16, idv, &got)) && got) {
+                for (ULONG i = 0; i < got; i++) {
+                    if (total < 5) say("      物件：%s", narrow(idv[i]).c_str());
+                    CoTaskMemFree(idv[i]);
+                }
+                total += got;
+                if (got < 16) break;
+            }
+            en->Release();
+        }
+        if (content) content->Release();
+        say("    Windows 列物件：%s，%lu 個", SUCCEEDED(he) ? "OK" : hr(he).c_str(), total);
+    }
+
     // ---- device info (retry: right after plugging in, Windows keeps the camera busy for a while)
     Ptp::Result info;
-    for (int attempt = 1; attempt <= 15; attempt++) {
+    for (int attempt = 1; attempt <= 3; attempt++) {
         info = ptp.read(0x1001, {});
         if (SUCCEEDED(info.hr) && info.data.size() >= 12) break;
-        say("    第 %d 次送指令：%s%s", attempt, hr(info.hr).c_str(),
-            info.hr == HRESULT_FROM_WIN32(ERROR_BUSY) ? "（相機忙碌中，2 秒後再試）" : "");
-        if (attempt == 1 && info.hr == HRESULT_FROM_WIN32(ERROR_BUSY))
-            say("    → 如果一直忙碌：關掉 X RAW STUDIO、相片 App、正在顯示相機的檔案總管視窗，或拔掉重插。");
+        say("    第 %d 次讀相機資訊（1001）：%s", attempt, hr(info.hr).c_str());
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
     if (FAILED(info.hr) || info.data.size() < 12) {
-        say("[失敗] PTP 指令一直送不出去（%s，回應 %04X）。", hr(info.hr).c_str(), info.code);
+        say("[未通過] 讀相機資訊的指令送不出去（%s）。上面各項的結果會告訴 Claude 哪些路還能走。", hr(info.hr).c_str());
         return 4;
     }
     size_t off = 8;  // StandardVersion(2) VendorExtensionID(4) VendorExtensionVersion(2)
